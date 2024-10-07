@@ -50,7 +50,9 @@ ia_label_mapping['text'] =  ia_label_mapping['identifier'].str.replace(r'[0-9]',
 # remove number from identifier to get text
 
 texts = ia_label_mapping['text'].unique().tolist()
-texts
+
+
+#%%
 
 for text in tqdm(texts):
     this_text = ia_label_mapping.loc[ia_label_mapping['text']==text]['IA_LABEL'].values
@@ -71,7 +73,6 @@ for text in tqdm(texts):
 # %% Get surprisal for each page (not using context of whole text)
 pages = ia_label_mapping['identifier'].unique().tolist()
 
-
 for text in tqdm(pages):
     this_text = ia_label_mapping.loc[ia_label_mapping['identifier']==text]['IA_LABEL'].values
     this_res = m.surprise(' '.join(this_text))[0]
@@ -87,25 +88,20 @@ ia_label_mapping.sort_values(by='surprisal_diff', ascending=False).head(10)
 
 #%% save to file
 ia_label_mapping.to_csv('../info/ia_label_mapping_opt_surprisal.csv', index=False)
-#%%
-# NOTE: didn't work
-# use GPT tokenizer to get IA mapping for each token 
-# tokenizer = AutoTokenizer.from_pretrained("facebook/opt-125m")
-# model = OPTModel.from_pretrained("facebook/opt-125m")
-# inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-# tokenizer = AutoTokenizer.from_pretrained('facebook/opt-125m')
-# tokens = tokenizer(' '.join(this_text), return_tensors='pt')
-# # convert tokens back to words to check against original words
-# words_from_tokens = tokenizer.convert_ids_to_tokens(tokens['input_ids'][0])
-# len(tokens['input_ids'][0])
-# print(f'{len(this_text)} tokenized words -> {len(this_res)} surprisal values')
-# # still not same number of words and surprisal values
 
+#%% visualize surprisal values
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_theme()
+plt.figure(figsize=(10,20))
+# display words from one page (identifier) and color code by surprisal
+page = ia_label_mapping.loc[ia_label_mapping['identifier']=='Bias0']
+# sort by IA_ID
+plt.barh(page['IA_ID'], page['opt-125m_surprisal_page'])
+plt.yticks(page['IA_ID'], page['IA_LABEL'])
+plt.xlabel('Surprisal')
+plt.title('Surprisal values for each word on one page')
+plt.gca().invert_yaxis()
+plt.show()
 
-
-
-
-
-
-# %% TODO: use levenshtein distance to match words to surprisal output
-
+# %%

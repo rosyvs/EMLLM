@@ -42,7 +42,51 @@ ia_label_mapping = ia_label_mapping.rename(columns={'CURRENT_FIX_INTEREST_AREA_I
 ia_label_mapping['IA_ID'] = pd.to_numeric(ia_label_mapping['IA_ID'], errors='coerce', downcast='integer')
 ia_label_mapping = ia_label_mapping[~ia_label_mapping['identifier'].str.contains('Sham')]
 ia_label_mapping = ia_label_mapping.dropna(subset='IA_ID').sort_values(by=['identifier', 'IA_ID']).reset_index(drop=True)
+
+# #%% some IAs are mistyped as these were entered manually by an RA, but are corect in the actual text.
+# # load original materials 
+# text_file = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Experiment/Materials/Texts_utf8.txt'
+# # thsio is tab seprated
+# texts_orig = pd.read_csv(text_file, sep='\t')
+# texts_orig['identifier'] = texts_orig['TextID']+(texts_orig['Page']-1).astype(str)
+# # split text into words and make a new df with row for each word and puncutation item (not splitting hyphenated words)
+# # keep the punctuation as separate words
+# texts_orig['Text2'] = texts_orig['Text'].str.replace(r'([.,!?])', r' \1', regex=True)
+# texts_orig['words'] = texts_orig['Text2'].str.split(' ')
+# # strip punc of fwords, but keep sole punctuation items
+
+
+# texts_orig_words = texts_orig.explode('words')
+# # greedy strip punctuation
+# punctuation = ['.', ',', '!', '?', "'", '"', '(', ')',':']
+# texts_orig_words['words'] = texts_orig_words['words'].apply(lambda x: x.strip(''.join(punctuation)) if x not in punctuation else x)
+
+# # try to align words in IA mapping to words in original text
+# texts_orig_words['index'] = texts_orig_words.groupby(['identifier'])['words'].cumcount()
+# ia_label_mapping['index'] = ia_label_mapping.groupby(['identifier'])['IA_LABEL'].cumcount()
+# # merge on index
+# ia_label_mapping = ia_label_mapping.merge(texts_orig_words, on=['identifier','index'], how='left')
+
+#%% fix typos in IA labels
+typos_fixed={
+    'maipulations':'manipulations',
+    'hypothsis':'hypothesis',
+    'sistuations':'situations',
+    'paticipant':'participant',
+    'intruments':'instruments',
+    'qualitics':'qualities',
+}
+for typo, fix in typos_fixed.items():
+    ia_label_mapping.loc[ia_label_mapping['IA_LABEL']==typo, 'IA_LABEL'] = fix
+
+# fix in the fixation report too
+for typo, fix in typos_fixed.items():
+    df.loc[df['CURRENT_FIX_INTEREST_AREA_LABEL']==typo, 'CURRENT_FIX_INTEREST_AREA_LABEL'] = fix
+
+#%%
 ia_label_mapping.to_csv('../info/ia_label_mapping.csv', index=False)   
+df.to_csv('../info/FixationReport_14feb2023_typosfixed.csv', index=False)
+
 
 # # %% compare df and df to check IA columns match
 # df_merged = pd.merge(df[df['identifier']=='Bias6'], df[df['identifier']=='Bias6'], how='left',on=['identifier','TRIAL_INDEX','CURRENT_FIX_INDEX'], suffixes=('_medha', '_dataviewer'))

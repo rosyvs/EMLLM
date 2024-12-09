@@ -83,10 +83,10 @@ for typo, fix in typos_fixed.items():
 for typo, fix in typos_fixed.items():
     df.loc[df['CURRENT_FIX_INTEREST_AREA_LABEL']==typo, 'CURRENT_FIX_INTEREST_AREA_LABEL'] = fix
 
+
 #%%
 ia_label_mapping.to_csv('../info/ia_label_mapping.csv', index=False)   
 df.to_csv('../info/FixationReport_14feb2023_typosfixed.csv', index=False)
-
 
 # # %% compare df and df to check IA columns match
 # df_merged = pd.merge(df[df['identifier']=='Bias6'], df[df['identifier']=='Bias6'], how='left',on=['identifier','TRIAL_INDEX','CURRENT_FIX_INDEX'], suffixes=('_medha', '_dataviewer'))
@@ -112,5 +112,6 @@ df.to_csv('../info/FixationReport_14feb2023_typosfixed.csv', index=False)
 # for text in texts:
 #     this_text = ia_label_mapping.loc[ia_label_mapping['identifier']==text]['IA_LABEL'].values
 # texts_orig = pd.read_csv('/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Experiment/Materials/Texts.csv')
+
 
 # %%

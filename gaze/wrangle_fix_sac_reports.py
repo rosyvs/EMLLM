@@ -12,11 +12,13 @@ fix_reportfile = '../info/FixationReport_14feb2023_typosfixed.csv'
 dff = pd.read_csv(fix_reportfile, low_memory=False, keep_default_na=True, na_values=['.'])
 dff['pID'] = dff['RECORDING_SESSION_LABEL'].str.extract(r'(EML1_\d{3})')
 pIDs_in_fixfile = dff['pID'].unique()
+
 #%% saccades
 sac_reportfile = '../info/SaccadeReport_with_sen_tag.csv'
 dfs = pd.read_csv(sac_reportfile, keep_default_na=True, na_values=['.'], low_memory=False)
 dfs['pID'] = dfs['RECORDING_SESSION_LABEL'].str.extract(r'(EML1_\d{3})')
 pIDs_in_sacfile = dfs['pID'].unique()
+
 #%%
 dfs.rename(columns={'NEXT_FIX_INDEX':'CURRENT_FIX_INDEX','NEXT_FIX_INTEREST_AREA_ID':'CURRENT_FIX_INTEREST_AREA_ID'}, inplace=True)
 ID_vars = ['pID','RECORDING_SESSION_LABEL','identifier','CURRENT_FIX_INDEX','CURRENT_FIX_INTEREST_AREA_ID']

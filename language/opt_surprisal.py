@@ -104,4 +104,37 @@ plt.title('Surprisal values for each word on one page')
 plt.gca().invert_yaxis()
 plt.show()
 
+# %% Additional lexical metrics
+
+
+# %% Word position in sentence
+ia_label_mapping = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
+text = ia_label_mapping['IA_LABEL'].tolist()
+# count sentences per identifier
+ia_label_mapping['sentence_ix'] = 0
+sentence_ix = 0
+word_in_sentence = 0
+for i, word in enumerate(text):
+    ia_label_mapping.loc[i, 'word_in_sentence'] = word_in_sentence
+    ia_label_mapping.loc[i, 'sentence_ix'] = sentence_ix
+    if word in ['.', '!', '?']  and text[i-1] != 'Mr':
+        sentence_ix += 1
+        word_in_sentence = 0
+    else:
+        word_in_sentence += 1
+
+# add column for sentence-level word counts
+sentences = ia_label_mapping['sentence_ix'].unique().tolist()
+for s in sentences:
+    ia_label_mapping.loc[ia_label_mapping['sentence_ix']==s, 'sentence_word_count'] = len(ia_label_mapping.loc[ia_label_mapping['sentence_ix']==s])
+ia_label_mapping['relative_word_position'] = ia_label_mapping['word_in_sentence'] / ia_label_mapping['sentence_word_count']
+
+# %% frequency
+from wordfreq import word_frequency
+ia_label_mapping['word_freq'] = ia_label_mapping['IA_LABEL'].apply(lambda x: word_frequency(x, 'en'))
+ia_label_mapping.to_csv('../info/ia_label_mapping_opt_surprisal.csv', index=False)   
+
+
+
+
 # %%

@@ -1,7 +1,8 @@
 ---
 title: "FRP surpisal"
 author: "Rosy Southwell"
-date: "2024-07-25"
+subtitle: "Fixed bug with baseline correction in EEG processing"
+date: "`r Sys.Date()`"
 output: 
   html_document:
     toc: true
@@ -9,35 +10,45 @@ output:
       collapsed: false
       smooth_scroll: false
     toc_depth: 4
-knit: (function(inputFile, encoding) { 
-          rmarkdown::render(inputFile,
-                        encoding=encoding, 
-                        output_file= "FRP_LMM_v6_nodc.html") })
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding, 
+                        output_file = "FRP_LMM_v7.1_nodc.html"
+                        )})
 ---
-#
-```{r,message=FALSE, warning=FALSE, echo=F, include=F}
-library(lme4)
-library(lmerTest)
-library(reshape2)
-library(plyr)
-library(beepr)
-library(car)
-library(sjPlot)
-library(emmeans)
-library(ggplot2)
-library(dplyr)
-library(tidyr)
-library(readxl)
-library(optimx)
-library(dfoptim)
-library(robustlmm)
-library(mediation) 
-library(stringr)
-library(ggpubr)
-library(gridExtra)
-library(lattice)
-library(blme)
-library(DescTools)
+
+```{r}
+USE_DC <- F
+version <- "v7.1"
+description <- "v7 but with 7 subjects excluded using QC based on reading v sham classifier"
+knitname<- paste0("FRP_LMM_",version,"_", (if(USE_DC){"dc"} else {"nodc"}), ".html")
+```
+# Info
+## USE_DC: `r USE_DC`
+## version: `r version`
+## description: `r description`
+
+# Data
+```{r, message=FALSE, warning=FALSE}
+# List of libraries to be installed and loaded
+libraries <- c(
+  "lme4", "lmerTest", "reshape2", "plyr", "beepr", "car", "sjPlot", "emmeans",
+  "ggplot2", "tidyr", "readxl", "optimx", "dfoptim", "robustlmm", "mediation",
+  "stringr", "ggpubr", "gridExtra", "lattice", "blme", "DescTools", "dplyr", "tidyverse"
+)
+
+# Function to install and load libraries
+install_and_load <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+      library(lib, character.only = TRUE)
+    }
+  }
+}
+
+# Install and load the libraries
+install_and_load(libraries)
 options(scipen = 50)
 
 ```
@@ -45,11 +56,11 @@ options(scipen = 50)
 load data
 
 ```{r, message=F, warning=F}
-USE_DC <- TRUE
-
-text = read.csv('/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/EMLLM/info/ia_label_mapping_opt_surprisal.csv')
-if (USE_DC){eeg_dir = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/Data/EEG_processed/unfolded_FRP_reparsed_v6/n400_stats_recomputed/'
-} else {eeg_dir = '/Volumes/Blue1TB/EEG_processed/unfolded_FRP_reparsed_v6/n400_stats_nodc/'
+text_file = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/EMLLM/info/ia_label_mapping_opt_surprisal.csv'
+if (USE_DC){
+  eeg_dir = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/Data/EEG_processed/unfolded_FRP_reparsed_v7/n400_stats/'
+} else {
+  eeg_dir = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/Data/EEG_processed/unfolded_FRP_reparsed_v7/n400_stats_nodc/'
 }
 file_pat = '_reading_N400_stats\\.csv$'
 files=list.files(path = eeg_dir, pattern= file_pat)
@@ -65,14 +76,24 @@ for (f in files){
     pID <- paste(p[[1]][1],p[[1]][2],sep='_')
     df$pID <- pID
     # df<- df %>% dplyr::select(c("pID", "type","latency","fixDur","task","identifier" , "page_fixation_ix","IA_ID","n400_magnitude_CPz","n400_latency_CPz"  ))
-    df<- df %>% filter(task=='reading') %>% droplevels()
+    df<- df %>% filter(task %in% c('reading','sham')) %>% droplevels()
     all[[i]] <- df
 }
-df <- do.call(rbind, all)
+df_all <- do.call(rbind, all)
+df<-df_all
 ```
 
-# Merge with text info for surprisal values
+subjects excluded using QC based on reading v sham classifier <.55 AUROC
+```{r, message=F, warning=F}
+
+exclude <- c("EML1_034", "EML1_055", "EML1_093", "EML1_099" ,"EML1_115", "EML1_132", "EML1_154")
+df <- df %>% filter(!pID %in% exclude)
+```
+
+## Merge with text info and filter fixations
 ```{r}
+text <- read.csv(text_file, colClasses=c("punctuation"="logical","stop_word"="logical","text"="factor","identifier"="factor"))
+df<-df %>% filter(task=='reading')
 delta_wf = log(min(text$word_freq[text$word_freq>0]))-1 # use the minimum word frequency for any missing word frerquencies so we can take log
 
 text <- text %>% rename(surprisalText=opt.125m_surprisal_wholetext, surprisalPage = opt.125m_surprisal_page)
@@ -87,7 +108,9 @@ df <- df %>% merge(text, on=c("IA_ID","identifier")) %>% rename(fixDur=duration)
 # drop rows with no IA
 df <- drop_na(df, "IA_LABEL")
 # drop rows with punc
-df <- df %>% filter(! IA_LABEL %in% c('.',',','-','--',';',':',"'",'?','!'))
+df <- df %>% filter(punctuation==F)
+# drop stopwords
+df <- df %>% filter(stop_word==F)
 
 feats <- grep("n400|p1|n1|fixDur",colnames(df), value=T)
 feats_eeg <- grep("n400|p1|n1",colnames(df), value=T)
@@ -107,7 +130,8 @@ geom_point(alpha=0.5, size=0.5)+stat_cor(method="pearson", size=4, r.accuracy=0.
 df<-df %>% mutate(
                   logSurprisalText = log(surprisalText),
                   logSurprisalPage = log(surprisalPage),
-                  logWordFreq = ifelse(word_freq>0,log(word_freq),-18.98)
+                  logWordFreq = ifelse(word_freq>0,log(word_freq),-18.98),
+                  logFixDur = log(fixDur)
 )
 # lagged surprisal
 df <- df %>% group_by(pID, identifier) %>% arrange(page_fixation_ix, .by_group=T) %>% 
@@ -122,11 +146,12 @@ df <- df %>% group_by(pID, identifier, IA_ID) %>% mutate(
   refixation_ = ifelse(n()>1,1,0),
   refixation=as.factor(ifelse(n()>1,1,0)))
 
+df <- df %>% filter(refixation==0)
+
 # channel averags
 df <- df %>% mutate(
   p1_mean = (p1_mean_PPO9h + p1_mean_PPO10h / 2),
   n1_mean = (n1_mean_PPO9h + n1_mean_PPO10h / 2)
-logFixDur = log(fixDur)
 )
 
 ```
@@ -144,8 +169,6 @@ ylims <- df_long %>%
   group_by(feature_type) %>%
   summarise(Q1 = quantile(value, 1/100), Q3 = quantile(value, 99/100)) %>%
   ungroup()
-
-
 
 p1<-ggplot(df_long %>% filter(feature_type=='n400_mean')) + 
   geom_density(aes(x=value, fill=channel), alpha=0.3) + xlim(-1000,1000) + ggtitle('n400_mean')
@@ -167,28 +190,13 @@ ggplot(df_long)+
     geom_violin(aes(x=value,y=factor(channel), fill=factor(channel),outliers = FALSE), alpha=0.3)+
   facet_wrap(~feature_type, scales="free") 
 
-ggplot(df_long %>% filter(feature_type =='n400_mean'))+
-    geom_point(aes(x=surprisalText,y=value, color=factor(channel)), alpha=0.05, size=0.5)+
-  facet_wrap(~channel, scales="free") 
-
-
-```
-
-
-## repeat some plots after transformatiions
-```{r}
-
+# surprisal scatterplots
 ggplot(df,aes(x=logSurprisalText, y=logFixDur)) + 
   geom_point(size=1, alpha=0.01)+stat_cor(method="pearson")
 ggplot(df_long %>% filter(feature_type =='n400_mean'),aes(x=logSurprisalText,y=value, color=factor(channel)))+
     geom_point(alpha=0.01, size=0.5)+stat_cor(method="pearson", size=2, r.accuracy=0.01, p.accuracy=0.001, label.x=-7.5, label.y=1000)+
   facet_wrap(~channel, scales="free") 
-ggplot(df_long %>% filter(feature_type =='n400_max_magnitude'),aes(x=logSurprisalText,y=value, color=factor(channel)))+
-    geom_point(alpha=0.01, size=0.5)+stat_cor(method="pearson", size=2, r.accuracy=0.01, p.accuracy=0.001, label.x=-7.5, label.y=1000)+
-  facet_wrap(~channel, scales="free") 
-ggplot(df_long %>% filter(feature_type =='n400_min_magnitude'),aes(x=logSurprisalText,y=value, color=factor(channel)))+
-    geom_point(alpha=0.01, size=0.5)+stat_cor(method="pearson", size=2, r.accuracy=0.01, p.accuracy=0.001, label.x=-7.5, label.y=1000)+
-  facet_wrap(~channel, scales="free") 
+
 ```
 
 
@@ -214,7 +222,7 @@ tab_model(m.d)
 
 ## predict fixation fixDur from EEG features
 ```{r, message=F, warning=F}
-m.eye <- lmer(fixDur ~ (1|identifier) + (1|pID) + n400_mean_CPz, data=df)
+m.eye <- lmer(fixDur ~ (1|identifier) + (1|pID) + n400_mean_CPz+ p1_mean +n1_mean, data=df)
 tab_model(m.eye)
 ```
 
@@ -225,46 +233,32 @@ tab_model(mp.m)
 mp.s <- lm( logSurprisalText ~ prev_logSurprisalText, data=df)
 tab_model(mp.s)
 ```
-## model including bool for refixation 
-```{r, message=F, warning=F}
-mr.m <- lmer(n400_mean_CPz ~ (1|identifier) + (1|pID) + logFixDur + refixation*logSurprisalText, data=df)
-tab_model(mr.m)
-Anova(mr.m)
-plot_model(mr.m,type = "emm", terms=c("logSurprisalText", "refixation"))
-tb<-tableone::CreateTableOne(data = df, vars = c("n400_mean_CPz", "logFixDur"), strata = 'refixation', test=T)
-knitr::kable(print(tb))
-```
+<!-- ## model including bool for refixation  -->
+<!-- ```{r, message=F, warning=F} -->
+<!-- mr.m <- lmer(n400_mean_CPz ~ (1|identifier) + (1|pID) + logFixDur + refixation*logSurprisalText, data=df) -->
+<!-- tab_model(mr.m) -->
+<!-- Anova(mr.m) -->
+<!-- plot_model(mr.m,type = "emm", terms=c("logSurprisalText", "refixation")) -->
+<!-- tb<-tableone::CreateTableOne(data = df, vars = c("n400_mean_CPz", "logFixDur"), strata = 'refixation', test=T) -->
+<!-- knitr::kable(print(tb)) -->
+<!-- ``` -->
 
-## model only firstpass fixations
-```{r, message=F, warning=F}
-m.fp.m <- lmer(n400_mean_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# m.fp.min <- lmer(n400_max_magnitude_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# m.fp.max <- lmer(n400_min_magnitude_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# m.fp.zc <- lmer(n400_zero_crossings_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# tab_model(m.fp.m, m.fp.min, m.fp.max, m.fp.zc, show.ci=F)
-m.fp.p1 <-lmer(p1_mean ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df%>% filter(refixation_==1))
-m.fp.n1 <- lmer(n1_mean ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df%>% filter(refixation_==1))
-tab_model(m.fp.m, m.fp.p1, m.fp.n1, show.ci=F)
-```
 
-## model including other lexical variables & first pass fixations only
+
+## predict EEG from surprisal and other lexical variables 
 ```{r, message=F, warning=F}
-m.lx.m <- lmer(n400_mean_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText + logWordFreq + relative_word_position, data=df %>% filter(refixation_==1))
-# m.fp.min <- lmer(n400_max_magnitude_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# m.fp.max <- lmer(n400_min_magnitude_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# m.fp.zc <- lmer(n400_zero_crossings_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText, data=df %>% filter(refixation_==1))
-# tab_model(m.fp.m, m.fp.min, m.fp.max, m.fp.zc, show.ci=F)
-m.lx.p1 <-lmer(p1_mean ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText+ logWordFreq + relative_word_position, data=df%>% filter(refixation_==1))
-m.lx.n1 <- lmer(n1_mean ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText+ logWordFreq + relative_word_position, data=df%>% filter(refixation_==1))
+m.lx.m <- lmer(n400_mean_CPz ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText + logWordFreq + relative_word_position, data=df )
+m.lx.p1 <-lmer(p1_mean ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText+ logWordFreq + relative_word_position, data=df)
+m.lx.n1 <- lmer(n1_mean ~ (1|identifier) + (1|pID) + logFixDur + logSurprisalText+ logWordFreq + relative_word_position, data=df)
 tab_model(m.lx.m, m.lx.p1, m.lx.n1, show.ci=F)
 
 ```
 
 ## predict EEG from surprisal and fixDur with random slope of surprisal for participant
 ```{r, message=F, warning=F}
-m.rs.m <- lmer(n400_mean_CPz ~ (1+logSurprisalText|pID) + (1|identifier) + logSurprisalText + logFixDur, data=df)
-m.rs.min <- lmer(n400_max_magnitude_CPz ~ (1+logSurprisalText|pID) +  (1|identifier) + logFixDur + logSurprisalText, data=df)
-m.rs.max <- lmer(n400_min_magnitude_CPz ~(1+logSurprisalText|pID) +  (1|identifier) + logFixDur + logSurprisalText, data=df)
+m.rs.m <- lmer(n400_mean_CPz ~ (1+logSurprisalText|pID) + (1|identifier) + logSurprisalText + logFixDur+ logWordFreq + relative_word_position, data=df)
+m.rs.min <- lmer(n400_max_magnitude_CPz ~ (1+logSurprisalText|pID) +  (1|identifier) + logFixDur + logSurprisalText+ logWordFreq + relative_word_position, data=df)
+m.rs.max <- lmer(n400_min_magnitude_CPz ~(1+logSurprisalText|pID) +  (1|identifier) + logFixDur + logSurprisalText+ logWordFreq + relative_word_position, data=df)
 tab_model(m.rs.m, m.rs.min, m.rs.max, show.ci=F)
 dotplot(ranef(m.rs.m))
 ```
@@ -279,59 +273,58 @@ df_comp <- df_comp %>% rename(pID=ParticipantID) %>%
          identifier=paste0(Text, Page))
 df <- merge(df, df_comp, on=c("pID","identifier"))
 df_mw <- df %>% drop_na(MW) %>% mutate(MW=as.factor(MW))
-```
-
-## model FIXATION LEVEL N400 ~ surprisal*MW (caveat - MW is at page level)
-```{r, message=F, warning=F}
-m.mw <- lmer(n400_mean_CPz ~ (1+logSurprisalText|pID) + (1|identifier)  + logSurprisalText*MW , data=df_mw)
-Anova(m.mw)
-tab_model(m.mw)
-plot_model(m.mw,type = "emm", terms=c("logSurprisalText", "MW"))
-plot_model(m.mw,type = "emm", terms=c("logFixDur", "MW"))
-
-emmeans(m.mw, pairwise ~ MW, p.adjust = "fdr")
 
 ```
 
-# bobby's mode: MW label at page level, surprosal and n400 at fixation level
+# bobby's models: EEG ~ MW*lang at fixation level
+## N400
 ```{r, message=F, warning=F}
 # mB <- allFit(lmer(n400_mean_CPz ~ 1 + MW*logSurprisalText + (MW*logSurprisalText|pID) + (logSurprisalText|pID:identifier), data=df_mw))
-mB <- lmer(n400_mean_CPz ~ 1 + MW*logSurprisalText + (MW*logSurprisalText|pID) + (logSurprisalText|pID:identifier), data=df_mw, control=lmerControl(optimizer='Nelder_Mead'))
+mB <- lmer(n400_mean_CPz ~ 1 + MW*logSurprisalText + MW*logWordFreq + MW*relative_word_position +(MW*logSurprisalText|pID) + +(MW*logWordFreq|pID) + (logSurprisalText|pID:identifier) + (logWordFreq|pID:identifier) + (relative_word_position|pID:identifier), data=df_mw, control=lmerControl(optimizer='Nelder_Mead'))
 summary(mB)
 tab_model(mB)
+emmeans(mB, pairwise ~ MW, p.adjust = "fdr")
 ```
-
-## min n400
+## P1
 ```{r, message=F, warning=F}
 # mB <- allFit(lmer(n400_mean_CPz ~ 1 + MW*logSurprisalText + (MW*logSurprisalText|pID) + (logSurprisalText|pID:identifier), data=df_mw))
-mB.min <- lmer(n400_min_magnitude_CPz ~ 1 + MW*logSurprisalText + (MW*logSurprisalText|pID) + (logSurprisalText|pID:identifier), data=df_mw, control=lmerControl(optimizer='Nelder_Mead'))
-summary(mB.min)
-tab_model(mB.min)
+mB <- lmer(p1_mean ~ 1 + MW*logSurprisalText + MW*logWordFreq + MW*relative_word_position +(MW*logSurprisalText|pID) + +(MW*logWordFreq|pID) + (logSurprisalText|pID:identifier) + (logWordFreq|pID:identifier) + (relative_word_position|pID:identifier), data=df_mw, control=lmerControl(optimizer='Nelder_Mead'))
+summary(mB)
+tab_model(mB)
+emmeans(mB, pairwise ~ MW, p.adjust = "fdr")
 ```
-
-## max n400
+## N1
 ```{r, message=F, warning=F}
 # mB <- allFit(lmer(n400_mean_CPz ~ 1 + MW*logSurprisalText + (MW*logSurprisalText|pID) + (logSurprisalText|pID:identifier), data=df_mw))
-mB.max <- lmer(n400_max_magnitude_CPz ~ 1 + MW*logSurprisalText + (MW*logSurprisalText|pID) + (logSurprisalText|pID:identifier), data=df_mw, control=lmerControl(optimizer='Nelder_Mead'))
-summary(mB.max)
-tab_model(mB.max)
+mB <- lmer(n1_mean ~ 1 + MW*logSurprisalText + MW*logWordFreq + MW*relative_word_position +(MW*logSurprisalText|pID) + +(MW*logWordFreq|pID) + (logSurprisalText|pID:identifier) + (logWordFreq|pID:identifier) + (relative_word_position|pID:identifier), data=df_mw, control=lmerControl(optimizer='Nelder_Mead'))
+summary(mB)
+tab_model(mB)
+emmeans(mB, pairwise ~ MW, p.adjust = "fdr")
 ```
 
 # Eye-mind-linkage metric at page level
 note atanh transform for correlation when it is to be used in model
-```{r, message=F, warning=F, fig.width=3, fig.height=3}
+```{r, message=F, warning=F}
 eml_page <- df %>% group_by(pID, identifier) %>% summarise(
     count=n(),
     cor_n400meanCPz_logSurprisalText = atanh(cor(logSurprisalText, n400_mean_CPz)),
     cor_n400minCPz_logSurprisalText = atanh(cor(logSurprisalText, n400_min_magnitude_CPz)),
     cor_n400maxCPz_logSurprisalText = atanh(cor(logSurprisalText, n400_max_magnitude_CPz)),
+    cor_n400meanCPz_logWordFreq = atanh(cor(logWordFreq, n400_mean_CPz)),
+    cor_P1_logSurprisalText = atanh(cor(logSurprisalText, p1_mean)),
+    cor_N1_logSurprisalText = atanh(cor(logSurprisalText, n1_mean)),
+    cor_P1_logWordFreq = atanh(cor(logWordFreq, p1_mean)),
+    cor_N1_logWordFreq = atanh(cor(logWordFreq, n1_mean)),
     cor_logFixDur_logSurprisalText = atanh(cor(logSurprisalText, logFixDur)),
-    meanLogSurprisalText=mean(logSurprisalText)
+    meanLogSurprisalText=mean(logSurprisalText),
+    meanP1=mean(p1_mean),
+    meanN1=mean(n1_mean),
+    meanN400=mean(n400_mean_CPz)
 ) %>% drop_na() %>% 
   filter(count>2) # remove instances with single or two fixation on page as correlation coeff will be 1 or -1
 eml_page[Reduce(`&`, lapply(eml_page, is.finite)),]
 
-df_page <- left_join(eml_page, df_comp, on=c('pID', 'identifer')) 
+df_page <- left_join(eml_page, df_comp, by=c('pID', 'identifier')) 
 df_page$MW = as.factor(df_page$MW)
 
 
@@ -341,74 +334,82 @@ p1<-ggplot(df_page %>% drop_na(MW))+
 p2<-ggplot(df_page %>% drop_na(MW))+
   geom_density( aes(x=cor_logFixDur_logSurprisalText, color=MW))
 p3<-ggplot(df_page %>% drop_na(MW))+
-  geom_density( aes(x=cor_n400minCPz_logSurprisalText, color=MW))
+  geom_density( aes(x=cor_P1_logSurprisalText , color=MW))
 p4<-ggplot(df_page %>% drop_na(MW))+
-  geom_density( aes(x=cor_n400maxCPz_logSurprisalText, color=MW))
-grid.arrange(p1,p2,p3,p4)
+  geom_density( aes(x=cor_N1_logSurprisalText , color=MW))
+p5<-ggplot(df_page %>% drop_na(MW))+
+  geom_density( aes(x=cor_P1_logWordFreq , color=MW))
+p6<-ggplot(df_page %>% drop_na(MW))+
+  geom_density( aes(x=cor_N1_logWordFreq , color=MW))
+grid.arrange(p1,p2,p3,p4, p5,p6)
+
+p1<-ggplot(df_page %>% drop_na(MW))+
+  geom_boxplot( aes(x=meanP1, color=MW))
+p2<-ggplot(df_page %>% drop_na(MW))+
+  geom_boxplot( aes(x=meanN1, color=MW))
+p3<-ggplot(df_page %>% drop_na(MW))+
+  geom_boxplot( aes(x=meanN400 , color=MW))
+grid.arrange(p1,p2,p3)
 # plot by participantID
-ggplot(df_page, aes(x=cor_n400meanCPz_logSurprisalText, y=pID)) +
-  geom_boxplot(  horizontal = TRUE,        outlier.colour="red",
-        outlier.fill="red",
-        outlier.size=0.2)
+# ggplot(df_page, aes(x=cor_n400meanCPz_logSurprisalText, y=pID)) +
+#   geom_boxplot(  horizontal = TRUE,        outlier.colour="red",
+#         outlier.fill="red",
+#         outlier.size=0.2)
 
 ```
 
-# binomial regression: predict page level MW from page level correlations with surprisal
+## binomial regression: predict page level MW from page level correlations with surprisal
 ```{r, message=F, warning=F}
-
-m.mw.mean <- glmer(MW ~ cor_n400meanCPz_logSurprisalText + (1|identifier) + (1+cor_n400meanCPz_logSurprisalText|pID), data=df_page %>% drop_na(MW), family = "binomial")
-plot_model(m.mw.mean,type = "emm", terms=c("cor_n400meanCPz_logSurprisalText"))
-
-m.mw.min <- glmer(MW ~ cor_n400minCPz_logSurprisalText  + (1|identifier) + (1+cor_n400minCPz_logSurprisalText|pID), data=df_page %>% drop_na(MW), family = "binomial")
-plot_model(m.mw.min,type = "emm", terms=c("cor_n400minCPz_logSurprisalText"))
-
-m.mw.max <- glmer(MW ~ cor_n400maxCPz_logSurprisalText  + (1|identifier) + (1+cor_n400maxCPz_logSurprisalText|pID), data=df_page %>% drop_na(MW), family = "binomial")
-plot_model(m.mw.max,type = "emm", terms=c("cor_n400maxCPz_logSurprisalText"))
-
-m.mw.all <- glmer(MW ~ cor_n400meanCPz_logSurprisalText + cor_n400minCPz_logSurprisalText  +cor_n400maxCPz_logSurprisalText  + (1|identifier) + (1|pID), data=df_page %>% drop_na(MW), family = "binomial")
-
-tab_model(m.mw.mean, m.mw.min, m.mw.max)
-tab_model(m.mw.mean)
+m.mw.all <- glmer(MW ~ 
+                    cor_P1_logWordFreq + cor_P1_logSurprisalText +  cor_N1_logWordFreq  + cor_N1_logSurprisalText +
+                    cor_n400meanCPz_logWordFreq + cor_n400meanCPz_logSurprisalText   + 
+                    meanP1 + meanN1 + meanN400 +
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(MW), family = "binomial")
+m.mw.n400 <- glmer(MW ~ 
+                    cor_n400meanCPz_logWordFreq + cor_n400meanCPz_logSurprisalText   + 
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(MW), family = "binomial")
+m.mw.p1<- glmer(MW ~ 
+                    cor_P1_logWordFreq + cor_P1_logSurprisalText   + 
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(MW), family = "binomial")
+m.mw.n1<- glmer(MW ~ 
+                    cor_N1_logWordFreq + cor_N1_logSurprisalText   + 
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(MW), family = "binomial")
+m.mw.main <- glmer(MW ~ meanP1 + meanN1 + meanN400 +
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(MW), family = "binomial")
+# tab_model(m.mw.mean, m.mw.min, m.mw.max)
+# tab_model(m.mw.mean)
 tab_model(m.mw.all)
 
-emmeans(m.mw.mean, pairwise ~ cor_n400meanCPz_logSurprisalText, p.adjust = "fdr")
+tab_model(m.mw.main)
+tab_model(m.mw.p1)
+tab_model(m.mw.n1)
+tab_model(m.mw.n400)
+
+```
+## binomial regression: predict page level comprehensionfrom page level correlations with surprisal
+```{r, message=F, warning=F}
+comp_label <-'Rote_X'
+m.comp.all <- glmer(Rote_X ~ 
+                    cor_P1_logWordFreq + cor_P1_logSurprisalText +  cor_N1_logWordFreq  + cor_N1_logSurprisalText +
+                    cor_n400meanCPz_logWordFreq + cor_n400meanCPz_logSurprisalText   +
+                    meanP1 + meanN1 + meanN400 +
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+m.comp.n400 <- glmer(Rote_X ~ 
+                    cor_n400meanCPz_logWordFreq + cor_n400meanCPz_logSurprisalText   + 
+                    (1|identifier) + (1|pID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+
+# tab_model(m.comp.mean, m.comp.min, m.comp.max)
+# tab_model(m.comp.mean)
+tab_model(m.comp.all)
+tab_model(m.comp.n400)
 
 ```
 
-# Does page-average surprisal predict MW
+# Does page-average surprisal predict MW or comprehension
 ```{r}
 m.mw.sp <- glmer(MW ~ meanLogSurprisalText  +  (1+meanLogSurprisalText|pID), data=df_page %>% drop_na(MW), family = "binomial")
 tab_model(m.mw.sp)
+
+m.comp.sp <- glmer(Rote_X ~ meanLogSurprisalText  +  (1+meanLogSurprisalText|pID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+tab_model(m.comp.sp)
 ```
-
-<!-- # Features from EEG without overlap corrections -->
-<!-- ```{r, message=F, warning=F} -->
-<!-- eeg_dir = '/Volumes/Blue1TB/EEG_processed/unfolded_FRP_reparsed_v5/n400_stats_nodc/' -->
-<!-- file_pat = '_reading_N400_stats\\.csv$' -->
-<!-- files=list.files(path = eeg_dir, pattern= file_pat) -->
-<!-- # Loop over participants -->
-<!-- all<-c() -->
-<!-- i<-0 -->
-<!-- for (f in files){ -->
-<!--     i=i+1 -->
-<!--     df.nodc <-read.csv(paste0(eeg_dir,f)) -->
-<!--     p <- strsplit(f,'_') -->
-<!--     pID <- paste(p[[1]][1],p[[1]][2],sep='_') -->
-<!--     df.nodc$pID <- pID -->
-<!--     # df.nodc<- df.nodc %>% dplyr::select(c("pID", "type","latency","fixDur","task","identifier" , "page_fixation_ix","IA_ID","n400_magnitude_CPz","n400_latency_CPz"  )) -->
-<!--     df.nodc<- df.nodc %>% filter(task=='reading') %>% droplevels() -->
-<!--     all[[i]] <- df.nodc -->
-<!-- } -->
-<!-- df.nodc <- do.call(rbind, all) -->
-
-<!-- # Merge with text info for surprisal values -->
-<!-- df.nodc <- df.nodc %>% merge(text, on=c("IA_ID","identifier")) -->
-<!-- df.nodc <- df.nodc %>% rename(surprisalText=opt.125m_surprisal_wholetext, surprisalPage = opt.125m_surprisal_page,fixDur=duration) -->
-<!-- # drop rows with no IA -->
-<!-- df.nodc <- drop_na(df.nodc, "IA_LABEL") -->
-<!-- # drop rows with punc -->
-<!-- df.nodc <- df.nodc %>% filter(! IA_LABEL %in% c('.',',','-','--',';',':',"'",'?','!')) -->
-<!-- colnames(df.nodc) <- sub("n400", "nodc_n400_",colnames(df.nodc)) -->
-<!-- feats_eeg_nodc <- grep("n400",colnames(df.nodc), value=T) -->
-<!-- ``` -->
-

@@ -9,6 +9,8 @@ from transformers import AutoTokenizer, OPTModel
 from surprisal import AutoHuggingFaceModel
 import torch
 from tqdm import tqdm
+import nltk
+
 #%% load models
 # load model using surprisal wrapper
 m = AutoHuggingFaceModel.from_pretrained('facebook/opt-125m', model_class='gpt')
@@ -127,14 +129,26 @@ for i, word in enumerate(text):
 sentences = ia_label_mapping['sentence_ix'].unique().tolist()
 for s in sentences:
     ia_label_mapping.loc[ia_label_mapping['sentence_ix']==s, 'sentence_word_count'] = len(ia_label_mapping.loc[ia_label_mapping['sentence_ix']==s])
-ia_label_mapping['relative_word_position'] = ia_label_mapping['word_in_sentence'] / ia_label_mapping['sentence_word_count']
+ia_label_mapping['relative_word_position'] = ia_label_mapping['word_in_sentence'] / (ia_label_mapping['sentence_word_count']-1)
 
 # %% frequency
 from wordfreq import word_frequency
 ia_label_mapping['word_freq'] = ia_label_mapping['IA_LABEL'].apply(lambda x: word_frequency(x, 'en'))
 ia_label_mapping.to_csv('../info/ia_label_mapping_opt_surprisal.csv', index=False)   
 
+# %% is function word
+ from nltk.corpus import stopwords
 
+def is_function_word(word):
+    stop_words = set(stopwords.words('english'))
+    return word.lower() in stop_words
 
+ia_label_mapping = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
+
+ia_label_mapping['stop_word'] = ia_label_mapping['IA_LABEL'].apply(is_function_word)
+
+# %% add tag for punctuation
+ia_label_mapping['punctuation'] = ia_label_mapping['IA_LABEL'].apply(lambda x: x in ['.', ',', '!', '?', ':', ';', '(', ')', '"', "'"])
+ia_label_mapping.to_csv('../info/ia_label_mapping_opt_surprisal.csv', index=False)   
 
 # %%

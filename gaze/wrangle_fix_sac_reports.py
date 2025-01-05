@@ -49,7 +49,7 @@ dff['order']=dff.fillna('.').groupby(ID_vars).cumcount()
 dfs['order']=dfs.fillna('.').groupby(ID_vars).cumcount()
 
 #%%
-df = dff.merge(dfs, on=ID_vars+['order'], how='left')
+df = dff.merge(dfs, on=ID_vars+['order'], how='left').drop(columns='order')
 
 # %% save
 df.to_csv('../info/FixationReport+InboundSaccades.csv', index=False)

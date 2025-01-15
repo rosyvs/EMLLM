@@ -9,7 +9,9 @@ import os
 import meegkit
 from mne.datasets import sample
 from mne.stats.regression import linear_regression_raw
-
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
+import scipy
 #%% time-resolved regression to get regressors for lexical variables for (overlapping) fixation related potentials
 
 #%% paths
@@ -19,76 +21,220 @@ event_fn_suffix = '_eyetracker_events.csv' # inside dir_fif, events containing f
 dir_out = '/Volumes/Blue1TB/EEG_processed/FRP_TRF_lexical/'
 os.makedirs(dir_out, exist_ok=True)
 dir_events = os.path.expanduser('~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/events/') # task events
-ia_df = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
+ia_df = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv').rename(columns={'opt-125m_surprisal_wholetext':'surprisal', 'opt-125m_surprisal_page':'surprisal_page'})
+ia_df['IA_ID'] = ia_df['IA_ID'].fillna('-1').astype(float).astype(int).astype(str)
+# set to NA any surprisal or frerquency for stop words and punctuation
+ia_df['word_freq'] = ia_df['word_freq'].where(~ia_df['stop_word'] & ~ia_df['punctuation'])
+ia_df['surprisal'] = ia_df['surprisal'].where(~ia_df['stop_word'] & ~ia_df['punctuation'])
+
 beh_df = pd.read_csv('~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/Behaviour/EML1_page_level.csv') # comp and MW scores
 eeg_trigger_df = pd.read_csv('../info/EEGtriggerSources.csv')
+fn_base = '_p.fif'
 
-# %% test subj
-pID = 'EML1_028'
-# %% load 
-EEG = mne.io.read_raw_fif(os.path.join(dir_fif, f'{pID}_p.fif'), preload=True)
-events = pd.read_csv(os.path.join(dir_fif, f'{pID}{event_fn_suffix}'))
-beh_df_i = beh_df[beh_df['ParticipantID']==pID]
-beh_df_i['identifier'] = beh_df_i['Text'].astype(str) + (beh_df_i['PageNum']-1).astype(str)
-# make annotations from events
-onsets = events['latency_sec'] # in seconds! 
-durations = events['duration_sec']
-descriptions = events['description']
-annot = mne.Annotations(onset=onsets, duration=durations, description=descriptions)
-EEG.set_annotations(annot)
+pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_fif) if f.endswith(fn_base)]
+# unique and sort
+pIDs = sorted(list(set(pIDs)))
+exclude = [20, 21, 22, 23, 24, 25, 26, 27, 31, 39, 40, 73, 77, 78, 87,88,93,99, 110,115,123,125, 138, 160, 164,167,168, 170,171,172,173, 175,176,177, 178,179] # ubj to exclude because no eeg or no trigger etc.
+pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
+
+REDO = False
+if REDO:
+
+    rERP_covmw_ALL = []
+    for pID in pIDs: 
+        try:
+            # %% load 
+            EEG = mne.io.read_raw_fif(os.path.join(dir_fif, f'{pID}_p.fif'), preload=True)
+            events = pd.read_csv(os.path.join(dir_fif, f'{pID}{event_fn_suffix}'))
+            # treat '.' as missing in 'IA_ID'
+            events['IA_ID'] = events['IA_ID'].replace('.', np.nan)
+            events['IA_ID'] = events['IA_ID'].fillna('-1')
+            events['eeg_sample'] = events['eeg_sample'].astype(float).astype(int)
+            # replace Fixation_R reparsed with Fixation_R
+            events['event_type'] = events['event_type'].replace('Fixation_R-reparsed','Fixation_R')
+            events['identifier'] = events['identifier'].fillna('') # some are NaN
+            events['task'] = events['task'].fillna('none') # some are NaN
+            events['event_type'] = events['event_type'].fillna('other') # some are NaN
+            events = events.drop_duplicates(subset=['latency_sec','description'])
+            beh_df_i = beh_df[beh_df['ParticipantID']==pID]
+            beh_df_i['identifier'] = beh_df_i['Text'].astype(str) + (beh_df_i['PageNum']-1).astype(str)
+            # merge lexical properties to events by IA_ID, which needs to be forced to be a string formatted as an integer not a float like 1.0
+            events = events.merge(ia_df, how='left')
+            events = events.merge(beh_df_i, how='left')
+            events['task+type'] = events['task'] + '/' + events['event_type']
+
+            # make annotations from events
+            onsets = events['latency_sec'] # in seconds! 
+            durations = events['duration_sec']
+            descriptions = events['task+type']
+
+            annot_all = mne.Annotations(onset=onsets, duration=durations, description=descriptions)
+
+            # %% select only reading events
+            # events_reading = events[events['task']=='reading']
+            # tmin = max([0, events_reading['latency_sec'].min()-60])
+            # tmax = min([EEG.times[-1],events_reading['latency_sec'].max()+60])
+            # EEG=EEG.crop(tmin=tmin, tmax=tmax)
+            # events_crop=events[events['latency_sec']>=EEG.times[0] & events['latency_sec']<=EEG.times[-1]]
+            # encode these events as annotation for epoching
+            EEG.set_annotations(annot_all)
+
+            # %% apply preprocessing to EEG (interp bads and reref alraedy done)
+            # # interpolate bad channels 
+            # EEG.interpolate_bads()
+            # # reref to average
+            # EEG.set_eeg_reference('average', projection=False)
+            # filter
+            EEG.filter(0.1, 40)
+            # resample to 100 Hz
+            EEG.resample(100)
+            # resample eveents: EEG sample needs to be recalculated. Use rounding as this is what events_from_annotations does
+            events['eeg_sample'] = (events['latency_sec']*EEG.info['sfreq']).round().astype(int)
+
+            fixations = events[events['event_type']=='Fixation_R']
+            # remove recalibartion fixations
+            fixations = fixations[~fixations['task'].str.contains('recal') | fixations['task'].str.contains('none')]
+            # drop  duplicates on eeg sample
+            dup_fixations = fixations[fixations.duplicated(subset='eeg_sample', keep=False)]['task+type']
+            # remove duplicated fixations, removing recal task version where possible
+            fixations = fixations.drop_duplicates(subset='eeg_sample', keep='first')
+            fixations = fixations.set_index('eeg_sample')
+            annot_fix = mne.Annotations(onset=fixations['latency_sec'], duration=fixations['duration_sec'], description=fixations['task+type'])
+            EEG.set_annotations(annot_fix)
+            trl_fix, trldict_fix = mne.events_from_annotations(EEG, regexp='.*Fixation_R')
+            # use latencies in trl to look up covariates in events
+
+            # make imputations for missing values.
+            # FOr lexical variables use mean over STIMULUS set not ove rfixaitons/obs so it is the same for all ppts
+            fixations['word_freq'] = fixations['word_freq'].fillna(ia_df['word_freq'].mean())
+            fixations['surprisal'] = fixations['surprisal'].fillna(ia_df['surprisal'].mean())
+            fixations['relative_word_position'] = fixations['relative_word_position'].fillna(ia_df['relative_word_position'].mean())
+            # # for these we essentially say that stop words nad punc are handles the same as non-word/ non-reading fixations, as it is only where these are False 
+            # # that interesting things are expected to happen w the lexical covariates
+            # fixations['stop_word'] = fixations['stop_word'].fillna(True).astype(bool) # 
+            # fixations['punctuation'] = fixations['punctuation'].fillna(True).astype(bool) # 
+            fixations['INBOUND_SAC_AMPLITUDE'] = fixations['INBOUND_SAC_AMPLITUDE'].fillna(fixations['INBOUND_SAC_AMPLITUDE'].mean()) # probably better to use some avg over whole datast? 
+
+            lexical_covariates = fixations.loc[trl_fix[:,0],[ 'surprisal', 'word_freq', 'relative_word_position']]
+            gaze_covariates = fixations.loc[trl_fix[:,0],[ 'INBOUND_SAC_AMPLITUDE']]#.fillna(0)
+            cognitive_covariates = fixations.loc[trl_fix[:,0],[ 'MW']]#.fillna(0)
+            covariates = pd.concat([lexical_covariates, gaze_covariates, cognitive_covariates], axis=1)
+            # wrap solver in a function to make it a callable
+
+            # need to handle signle channe;: first dim should be of size 1 so add a null singleton dim to first dim
+            def ridge_solver(X, y): 
+                res = Ridge(solver='auto',alpha=1000).fit(X, y).coef_
+                if len(res.shape)==1:
+                    res = np.expand_dims(res, axis=0)
+                return res
 
 
-# select only reading events
-events_reading = events[events['task']=='reading']
-EEG.crop(tmin=events_reading['latency_sec'].min()-60, tmax=events_reading['latency_sec'].max()+60)
-events=events[events['latency_sec']>=EEG.times[0] & events['latency_sec']<=EEG.times[-1]]
-# %% apply preprocessing to EEG
-# reref to average
-EEG.set_eeg_reference('average', projection=False)
-# filter
-EEG.filter(0.1, 40)
-# resample to 100 Hz
-EEG.resample(100)
+            # # 1. with separate condition for MW/no MW/not reading fixations
+            # 2. separate versions of lexical covariates for MW and no MW fixations
+            fixations['MW'] = fixations['MW'].fillna(-1).astype(int) # third condition for unknown MW label
+            fixations['task+type+MW'] = fixations['task+type'] + '/MW=' + fixations['MW'].astype(str)
 
-#%% sanity check: basic rERP for FRP vs epoch
-event_id = 'Fixation_R'
-sel = events[events['event_type'].str.contains(event_id)][['event_type','task','description','latency_sec','duration_sec']]
-# convert to ANnotation
-sel_annot = mne.Annotations(onset=sel['latency_sec'], duration=sel['duration_sec'], description=sel['description'])
+            annot_fixmw = mne.Annotations(onset=fixations['latency_sec'], duration=fixations['duration_sec'], description=fixations['task+type+MW'])
+            EEG.set_annotations(annot_fixmw)
+            trl_fixmw, trldict_fixmw = mne.events_from_annotations(EEG)
 
-# convert to mne events (numpy array)
-trl, trldict = mne.events_from_annotations(EEG, regexp=event_id)
-tmin, tmax = -0.3, 0.8
-epochs = mne.Epochs(EEG, trl, event_id=event_id, tmin=tmin, tmax=tmax, baseline=None, preload=True)
+            covariates.drop(columns=['MW'], inplace=True)
+            for c in lexical_covariates.columns:
+                for mw in [-1,0,1]:
+                    covariates[f'{c}_MW={mw}'] = fixations.loc[trl_fixmw[:,0][fixations['MW']==mw], c]
+                    covariates[f'{c}_MW={mw}'] = covariates[f'{c}_MW={mw}'].fillna(ia_df[c].mean())
+                covariates.drop(columns=c, inplace=True)
 
-# plot ERP
-fig, ax = plt.subplots()
-epochs.average().plot(axes=ax)
-ax.set(title=f'{event_id} ERP')
-plt.show()
+            rERP_covmw = linear_regression_raw(EEG, 
+                events=trl_fixmw, event_id=trldict_fixmw, 
+                tmin=tmin, tmax=tmax, 
+                reject={'eeg': 40e-5},
+                # picks='CPz',
+                covariates=covariates, solver=ridge_solver)
 
-# %% rERP
-rERP = linear_regression_raw(EEG, events, event_id=event_id, tmin=tmin, tmax=tmax, return_design=True)
+            # plot contrast between MW and no MW for main effect 
+            fig, ax = plt.subplots(3, 1)
+            rERP_covmw['reading/Fixation_R/MW=0'].plot(axes=ax[0], picks='CPz')
+            rERP_covmw['reading/Fixation_R/MW=1'].plot(axes=ax[1], picks='CPz')
+            contrast = mne.combine_evoked([rERP_covmw['reading/Fixation_R/MW=0'], rERP_covmw['reading/Fixation_R/MW=1']], weights=[1, -1])
+            contrast.plot(axes=ax[2], picks='CPz')
 
-# plot both results, and their difference
+            # plot surprisal effect for MW and no MW separately
+            fig, ax = plt.subplots(2, 1)
+            rERP_covmw['surprisal_MW=0'].plot(axes=ax[0], picks='CPz')
+            rERP_covmw['surprisal_MW=1'].plot(axes=ax[1], picks='CPz')
 
-# %% make GLM design matrix
-# fixation onsets, surprisal, frequency, MW label
-# merge lexical properties to events by IA_ID
-events['IA_ID'] = events['IA_ID'].astype(str)
-ia_df['IA_ID'] = ia_df['IA_ID'].astype(str)
-events = events.merge(ia_df, on=['identifier','IA_ID'], how='left')
+            # same plot different conditions
+            fig, ax = plt.subplots(2, 1)
+            condlist = ['reading/Fixation_R/MW=-1','reading/Fixation_R/MW=0', 'reading/Fixation_R/MW=1']
+            mne.viz.plot_compare_evokeds([rERP_covmw[c] for c in condlist], picks='CPz', axes=ax[0])
+            condlist = ['surprisal_MW=-1','surprisal_MW=0', 'surprisal_MW=1']
+            mne.viz.plot_compare_evokeds([rERP_covmw[c] for c in condlist], picks='CPz', axes=ax[1])
+            
+            #%% save regression erps
+            mne.write_evokeds(os.path.join(dir_out, f'{pID}_rERP_covmw-epo.fif'), [ev for ev in rERP_covmw.values()], overwrite=True)
+            # append to list of all subjects
+            rERP_covmw_ALL.append(rERP_covmw)
+        except Exception as e:
+            print(f'Error in {pID}: {e}')
+            continue
 
-# merge MW scores to events by identifier
-events = events.merge(beh_df_i, on='identifier', how='left')
+#%% read in already processed data
+pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_out) if f.endswith('_rERP_covmw-epo.fif')]
+rERP_covmw_ALL = [mne.read_evokeds(os.path.join(dir_out, f'{pID}_rERP_covmw-epo.fif')) for pID in pIDs]
 
-X = events[['event_type','identifier','task','latency_sec','surprisal','frequency','MW_label']]
+# group average and stats
+#%%
+# group average
+# reformat group results to a dict of condition keys and values is a list of evokeds one from each subject
+rERP_covmw_ALL2 = {}
+channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
+cond_combinations = {
+    'reading/Fixation_R': ['reading/Fixation_R/MW=-1','reading/Fixation_R/MW=0', 'reading/Fixation_R/MW=1'],
+    'surprisal': ['surprisal_MW=-1','surprisal_MW=0', 'surprisal_MW=1'],
+    'word_freq': ['word_freq_MW=-1','word_freq_MW=0', 'word_freq_MW=1'],
+    'relative_word_position': ['relative_word_position_MW=-1','relative_word_position_MW=0', 'relative_word_position_MW=1'],
+}
+condnames = {}
+for s in rERP_covmw_ALL:
+    # refformat to dict of conditions
+    s={evk.comment:evk for evk in s}
+    for cond,c in s.items():
+        condnames[cond] = cond
+        # baseline correct
+        c=c.apply_baseline((-.1, 0))
+        # check it contains CPz channel and skip if not
+        if set(channels).isdisjoint(c.ch_names):
+            print(f'{s} does not contain all channels, skipping')
+            continue
+        if cond in rERP_covmw_ALL2:
+            rERP_covmw_ALL2[cond].append(c)
+        else:
+            rERP_covmw_ALL2[cond] = [c]
+    # combo conditions using mne.combine_evoked
+    for cc, clist in cond_combinations.items():
+        res = mne.combine_evoked([s[ci] for ci in clist], weights='equal')
+        if cc in rERP_covmw_ALL2:
+            rERP_covmw_ALL2[cc].append(res)
+        else:
+            rERP_covmw_ALL2[cc] = [res]
+# equalize channels 
+for c in rERP_covmw_ALL2:
+    rERP_covmw_ALL2[c]=mne.equalize_channels(rERP_covmw_ALL2[c])
 
-X = X.sort_values(by='latency_sec')
-X_timeExpanded = pd.DataFrame()
-# event of interest is Fixation_R
-# in time range of -300 +800 ms
-# for each fixation event, for each timepont in range -300 +800 ms, add a colunm to the design matrix
+# combo conditions have annopying long names
+condnames.update({k: ' + '.join(['0.333 x ' + vi for vi in v]) for k,v in cond_combinations.items()})
 
+plot_conds = [
+    ['reading/Fixation_R','sham/Fixation_R/MW=-1'],
+    ['reading/Fixation_R/MW=0','reading/Fixation_R/MW=1'],
+    ['surprisal','word_freq','relative_word_position'],
+    ['surprisal_MW=0','surprisal_MW=1'],
+    ['word_freq_MW=0','word_freq_MW=1'],
+    ['relative_word_position_MW=0','relative_word_position_MW=1'],
+]
+for cc in plot_conds:
+# rERP_covmw_group = mne.grand_average(rERP_covmw_ALL)
+    plotdict = {k:rERP_covmw_ALL2[k] for k in cc}
+    mne.viz.plot_compare_evokeds(plotdict, picks='CPz' )
 
-# %% 

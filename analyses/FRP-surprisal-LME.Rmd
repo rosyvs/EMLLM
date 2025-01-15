@@ -34,7 +34,7 @@ knitname<- paste0("FRP_LMM_",version,"_", (if(USE_DC){"dc"} else {"nodc"}), ".ht
 libraries <- c(
   "lme4", "lmerTest", "reshape2", "plyr", "beepr", "car", "sjPlot", "emmeans",
   "ggplot2", "tidyr", "readxl", "optimx", "dfoptim", "robustlmm", "mediation",
-  "stringr", "ggpubr", "gridExtra", "lattice", "blme", "DescTools", "dplyr", "tidyverse"
+  "stringr", "ggpubr", "gridExtra", "lattice", "blme", "DescTools", "dplyr", "tidyverse","magrittr"
 )
 
 # Function to install and load libraries
@@ -412,4 +412,14 @@ tab_model(m.mw.sp)
 
 m.comp.sp <- glmer(Rote_X ~ meanLogSurprisalText  +  (1+meanLogSurprisalText|pID), data=df_page %>% drop_na(Rote_X), family = "binomial")
 tab_model(m.comp.sp)
+```
+
+# check crrelation between MW and comprehension
+```{r}
+cor.test(df_comp$MW, df_comp$Rote_X, method="spearman")
+
+# subj average comp df
+df_sub_comp <- df_comp %>% group_by(pID) %>% summarise_if(is.numeric,mean, na.rm=T)
+
+cor.test(df_sub_comp$MW, df_sub_comp$Rote_X, method="pearson")****
 ```

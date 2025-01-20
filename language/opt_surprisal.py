@@ -11,8 +11,13 @@ import torch
 from tqdm import tqdm
 import nltk
 from tqdm import tqdm
+import string
 
 #%%
+def strip_punc(text):
+    text=str(text)
+    return text.translate(str.maketrans('', '', string.punctuation))
+
 def agg_suprisal_to_words(res):
     # join tokens to get words & sum token surprisals and check these match original words
     # rejoin any tokens starting with Ġ to previous token
@@ -55,10 +60,11 @@ def match_word_indices(list1, list2):
     ix_list1 = []
     ix_list2 = []
     for i, w in enumerate(list2):
+        w = strip_punc(w)
         ix = ix_list1[-1] if len(ix_list1) > 0 else 0 # constrain search to be after last match
-        while (ix < len(list1)-1) and list1[ix] != w:
+        while (ix < len(list1)-1) and strip_punc(list1[ix]) != w:
             ix+=1
-        if w == list1[ix]:
+        if w == strip_punc(list1[ix]):
             ix_list1.append(ix)
             ix_list2.append(i)
     return ix_list1, ix_list2
@@ -153,17 +159,18 @@ ia_label_mapping['stop_word'] = ia_label_mapping['IA_LABEL'].apply(is_function_w
 # # surprisal
 # - GPT2 has been shown to be the best choice for modeling human surprise in reading in several papers, particularly the 'small' variant is better than larger
 # - OPT is a more recent model that is equivalent to GPT3 
-# #%% Load GPT2 & get surprisal for each word
+
+#%% Load GPT2 & get surprisal for each word
 m = AutoHuggingFaceModel.from_pretrained('gpt2') # 125m
 tokenizer = GPT2TokenizerFast.from_pretrained('gpt2') 
-add_surprisal_col(ia_label_mapping, 'identifier', m, tokenizer, 'gpt2_surprisal_page')
+ia_label_mapping = add_surprisal_col(ia_label_mapping, 'identifier', m, tokenizer, 'gpt2_surprisal_page')
 # add_surprisal_col(ia_label_mapping, 'text', m, tokenizer, 'gpt2_surprisal_wholetext')
 
-# opt is more like GPT3 and can model longer context
+#%% opt is more like GPT3 and can model longer context
 m = AutoHuggingFaceModel.from_pretrained('facebook/opt-125m', model_class='gpt')
 tokenizer = AutoTokenizer.from_pretrained('facebook/opt-125m')
-add_surprisal_col(ia_label_mapping, 'identifier', m, tokenizer, 'opt-125m_surprisal_page')
-add_surprisal_col(ia_label_mapping, 'text', m, tokenizer, 'opt-125m_surprisal_wholetext')
+ia_label_mapping = add_surprisal_col(ia_label_mapping, 'identifier', m, tokenizer, 'opt-125m_surprisal_page')
+ia_label_mapping = add_surprisal_col(ia_label_mapping, 'text', m, tokenizer, 'opt-125m_surprisal_wholetext')
 
 
 # # display words from one page (identifier) and color code by surprisal

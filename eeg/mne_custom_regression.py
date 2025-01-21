@@ -8,10 +8,15 @@ import os
 import meegkit
 from mne.datasets import sample
 from mne.stats.regression import linear_regression_raw, linear_regression, _clean_rerp_input, _make_evokeds
+from mne._fiff.pick import _picks_to_idx, pick_info, pick_types
+from mne.epochs import BaseEpochs
+from mne.evoked import Evoked, EvokedArray
+from mne.source_estimate import SourceEstimate
+from mne.utils import _reject_data_segments, fill_doc, logger, warn
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 import scipy
-from scipy import stats
+from scipy import stats, sparse, linalg
 
 def shift(arr, num, fill_value=np.nan):
     result = np.empty_like(arr)
@@ -162,6 +167,7 @@ def linear_regression_raw(
         A dict where the keys correspond to conditions and the values are
         Evoked objects with the ER[F/P]s. These can be used exactly like any
         other Evoked object, including e.g. plotting or statistics.
+    X: design matrix timeexpanded
     stats : dict
         beta, stderr, t_val, p_val, mlog10_p_val
 
@@ -215,14 +221,14 @@ def linear_regression_raw(
         )
 
     # construct Evoked objects to be returned from output
-    evokeds = _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info)
+    evokeds, regressor_indices = _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info)
 
     # get stats #TODO: actually compute these
     stats = dict()
     stats["beta"] = coefs
 
 
-    return X, evokeds, stats
+    return X, regressor_indices, evokeds, stats
 
 
 def _prepare_rerp_data(raw, events, picks=None, decim=1):
@@ -319,6 +325,7 @@ def _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info):
     """
     evokeds = dict()
     cumul = 0
+    regressor_indices = {}
     for cond in conds:
         tmin_, tmax_ = tmin_s[cond], tmax_s[cond]
         evokeds[cond] = EvokedArray(
@@ -329,5 +336,6 @@ def _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info):
             nave=cond_length[cond],
             kind="average",
         )  # nave and kind are technically incorrect #TODO: umm? 
+        regressor_indices[cond] = (cumul, cumul + tmax_ - tmin_)
         cumul += tmax_ - tmin_
-    return evokeds
+    return evokeds, regressor_indices

@@ -33,7 +33,11 @@ def shift(arr, num, fill_value=np.nan):
 def predict_EEG(X, betas):
     return np.dot(X, betas)
 
-def ridge_stats(model, y):
+def ridge_model(X, y, solver='auto', alpha=1):
+    res = Ridge(solver=solver,alpha=alpha).fit(X, y)
+    return res
+
+def ridge_stats(model, X, y):
     # estimate t stat and p values for betas from ridge regression
     # https://stats.stackexchange.com/questions/326294/how-to-calculate-t-statistics-for-ridge-regression
 
@@ -44,12 +48,13 @@ def ridge_stats(model, y):
     # Calculate p-values:
     # Use the stats.t.cdf function to calculate the cumulative distribution function of the t-distribution.
     # Calculate p-values (p_values) based on the t-statistics.
-
-    n, p = X.shape
-    y_pred = ridge.predict(X)
+    n = X.shape[0]
+    p = X.shape[1]
+    beta = model.coef_
+    y_pred = model.predict(X)
     residuals = y - y_pred
     mse = np.sum(residuals**2) / (n - p)
-    XTX_inv = np.linalg.inv(X.T @ X)
+    XTX_inv = np.linalg.inv(np.dot(X.T, X).toarray())
     se = np.sqrt(np.diagonal(mse * XTX_inv)) 
     t_stats = beta / se
 
@@ -57,12 +62,16 @@ def ridge_stats(model, y):
     p_values = 2 * (1 - stats.t.cdf(np.abs(t_stats), n - p))
 
     # Create a dataframe for results
-    results = pd.DataFrame({
-        'Beta': beta,
-        't-stat': t_stats,
-        'p-value': p_values
-    })
-    return results
+    stats_dict={
+        'n_times': n,
+        'n_predictors': p,
+        'y_pred':y_pred,
+        'betas': beta,
+        't-stats': t_stats,
+        'mse': mse,
+        'p-values': p_values
+    }
+    return stats_dict
 
 
 
@@ -70,7 +79,7 @@ def ridge_stats(model, y):
 # my edits of linear_regression_raw to return the model design matrix used
 
 
-def linear_regression_raw(
+def ridge_regression_raw(
     raw,
     events,
     event_id=None,
@@ -82,7 +91,7 @@ def linear_regression_raw(
     tstep=1.0,
     decim=1,
     picks=None,
-    solver="cholesky",
+    model="ridge",
 ):
     """Estimate regression-based evoked potentials/fields by linear modeling.
 
@@ -152,14 +161,8 @@ def linear_regression_raw(
         recommended for data recorded at high sampling frequencies, as
         otherwise huge intermediate matrices have to be created and inverted.
     %(picks_good_data)s
-    solver : str | callable
-        Either a function which takes as its inputs the sparse predictor
-        matrix X and the observation matrix Y, and returns the coefficient
-        matrix b; or a string.
-        X is of shape (n_times, n_predictors * time_window_length).
-        y is of shape (n_channels, n_times).
-        If str, must be ``'cholesky'``, in which case the solver used is
-        ``linalg.solve(dot(X.T, X), dot(X.T, y))``.
+    model : str | callable
+    sklearn model
 
     Returns
     -------
@@ -175,17 +178,13 @@ def linear_regression_raw(
     ----------
     .. footbibliography::
     """
-    if isinstance(solver, str):
-        if solver not in {"cholesky"}:
-            raise ValueError(f"No such solver: {solver}")
-        if solver == "cholesky":
-            def solver(X, y):
-                a = (X.T * X).toarray()  # dot product of sparse matrices
-                return linalg.solve(
-                    a, X.T * y, assume_a="pos", overwrite_a=True, overwrite_b=True
-                ).T
-
-    elif callable(solver):
+    if isinstance(model, str):
+        if model not in {"ridge"}:
+            raise ValueError(f"No such solver: {model}")
+        if model == "ridge":
+            print("Using Ridge regression model with defaul parameters (alpha=1)")
+            model = ridge_model
+    elif callable(model):
         pass
     else:
         raise TypeError("The solver must be a str or a callable.")
@@ -211,7 +210,10 @@ def linear_regression_raw(
     X, data = _clean_rerp_input(X, data, reject, flat, decim, info, tstep)
 
     # solve linear system
-    coefs = solver(X, data.T)
+    fitted = model(X, data.T)
+    coefs = fitted.coef_
+    if len(coefs.shape)==1:
+        coefs = np.expand_dims(coefs, axis=0)
     if coefs.shape[0] != data.shape[0]:
         raise ValueError(
             f"solver output has unexcepted shape {coefs.shape}. Supply a "
@@ -224,9 +226,7 @@ def linear_regression_raw(
     evokeds, regressor_indices = _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info)
 
     # get stats #TODO: actually compute these
-    stats = dict()
-    stats["beta"] = coefs
-
+    stats = ridge_stats(fitted, X, data.T)
 
     return X, regressor_indices, evokeds, stats
 
@@ -339,3 +339,13 @@ def _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info):
         regressor_indices[cond] = (cumul, cumul + tmax_ - tmin_)
         cumul += tmax_ - tmin_
     return evokeds, regressor_indices
+
+def _evokeds_to_coefs(evokeds, regressor_indices):
+    ncoefs = max(regressor_indices.values())[1]
+    nchans = evokeds[list(evokeds.keys())[0]].data.shape[0]
+    coefs = np.zeros((nchans, ncoefs))
+    # use regressor_indices to get the correct order of the betas
+    for cond in evokeds.keys():
+        start, end = regressor_indices[cond]
+        coefs[:,start:end] = evokeds[cond].data
+    return coefs

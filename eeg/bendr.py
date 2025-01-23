@@ -351,7 +351,7 @@ class _BENDREncoder(nn.Module):
         self.encoder_h = encoder_h
 
     def load(self, filename, strict=True):
-        state_dict = torch.load(filename)
+        state_dict = torch.load(filename, map_location='cpu' if not torch.cuda.is_available() else None)
         self.load_state_dict(state_dict, strict=strict)
 
     def save(self, filename):
@@ -587,7 +587,7 @@ class BENDRContextualizer(nn.Module):
             self.mask_replacement.requires_grad = False
 
     def load(self, filename, strict=True):
-        state_dict = torch.load(filename)
+        state_dict = torch.load(filename, map_location='cpu' if not torch.cuda.is_available() else None)
         self.load_state_dict(state_dict, strict=strict)
 
     def save(self, filename):

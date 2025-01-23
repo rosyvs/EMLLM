@@ -54,7 +54,12 @@ def ridge_stats(model, X, y):
     y_pred = model.predict(X)
     residuals = y - y_pred
     mse = np.sum(residuals**2) / (n - p)
-    XTX_inv = np.linalg.inv(np.dot(X.T, X).toarray())
+    # try to invert but sometomes X.T X is singular
+    try:
+        XTX_inv = np.linalg.inv(np.dot(X.T, X))
+    except:
+        print('Ridge regression stats: X.T X is singular, adding small value to diagonal')
+        XTX_inv = np.linalg.inv(np.dot(X.T, X) + 1e-10*np.eye(X.shape[1]))
     se = np.sqrt(np.diagonal(mse * XTX_inv)) 
     t_stats = beta / se
 
@@ -225,10 +230,13 @@ def ridge_regression_raw(
     # construct Evoked objects to be returned from output
     evokeds, regressor_indices = _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info)
 
-    # get stats #TODO: actually compute these
+    # get stats
     stats = ridge_stats(fitted, X, data.T)
-
-    return X, regressor_indices, evokeds, stats
+    stats['regressor_indices'] = regressor_indices
+    # unpack certain stats by condition
+    for key in ["betas", "t-stats", "p-values"]:
+        stats[key] = {cond: stats[key][:,idx[0]:idx[1]] for cond, idx in regressor_indices.items()}
+    return X, evokeds, stats
 
 
 def _prepare_rerp_data(raw, events, picks=None, decim=1):

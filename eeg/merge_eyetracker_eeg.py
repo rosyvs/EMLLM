@@ -48,7 +48,7 @@ eeg_trigger_df = pd.read_csv('../info/EEGtriggerSources.csv')
 # pIDs = sorted(list(set(pIDs)))
 # exclude = [20, 21, 22, 23, 24, 25, 26, 27, 31, 39, 40, 73, 77, 78, 87,88,93,99, 110,115,123,125, 138, 160, 164,167,168, 170,171,172,173, 175,176,177, 178,179] # ubj to exclude because no eeg or no trigger etc.
 # pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
-pIDs = [170, 171, 175, 176, 177, 178]
+pIDs = [33]
 pIDs = [f'EML1_{p:03d}' for p in pIDs]
 # pIDs = pIDs[pIDs.index('EML1_180'):]# restart from
 
@@ -167,7 +167,11 @@ for pID in pIDs:
     # annot_fix_new = mne.Annotations(onset=new_fixations['latency_sec'], duration=new_fixations['duration_sec'], description=new_fixations['description'])
 
     # %% Compare reparsed and old fixations, keep old right eye fixations that are after the last reparsed fixation
-    old_fixations = eye_events[eye_events['event_type'] == 'Fixation_R']
+    old_fixations = eye_events[eye_events['event_type'].str.contains('Fixation_R')]
+    if len(old_fixations)==0:
+        # use L instead
+        print(f"No right eye fixations for {pID}, using left")
+        old_fixations = eye_events[eye_events['event_type'].str.contains('Fixation_L')]
 
     print(f"{len(old_fixations)} fixations before. {len(new_fixations)} reparsed")
 
@@ -191,7 +195,11 @@ for pID in pIDs:
     # print(f"old and new fixations matched on eeg_sample: {len(comp2)} ")
     # %%
     # drop left eye
-    eye_events = eye_events[eye_events['eye']=='R']
+    if any(eye_events['eye']=='R'):
+        eye_events = eye_events[eye_events['eye']=='R']
+    else:
+        print(f"No right eye fixations for {pID}, using left")
+        eye_events = eye_events[eye_events['eye']=='L']
     eye_events = pd.concat([eye_events, new_fixations]).sort_values(by='latency_sec').dropna(subset=['latency_sec','eeg_sample']).reset_index(drop=True)
     annot_eye = mne.Annotations(onset=eye_events['latency_sec'], duration=eye_events['duration_sec'], description=eye_events['description'])
 

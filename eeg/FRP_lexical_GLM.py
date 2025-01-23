@@ -16,7 +16,7 @@ from functools import partial
 from mne_custom_regression import ridge_regression_raw
 import seaborn as sns
 sns.set_palette("tab10")
-
+import traceback
 # get current dir to construct relative paths
 dir_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(dir_path)
@@ -180,7 +180,7 @@ if REDO:
             ranges = list(zip(ranges[0], ranges[1]))
             # colour significant effects with shaded background
             for i, p in enumerate(ranges):
-                ax.axvspan(erp_times[i], erp_times[i+1], color='r', alpha=0.3)
+                ax.axvspan(erp_times[p[0]], erp_times[p[1]], color='r', alpha=0.3)
             fig.savefig(os.path.join(dir_out, f'{pID}_FRP_pvals.png'))
 
             ##### plot contrast between MW and no MW for main effect 

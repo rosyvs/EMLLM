@@ -97,6 +97,7 @@ def ridge_regression_raw(
     decim=1,
     picks=None,
     model="ridge",
+    estimate_stats=True,
 ):
     """Estimate regression-based evoked potentials/fields by linear modeling.
 
@@ -169,6 +170,9 @@ def ridge_regression_raw(
     model : str | callable
     sklearn model
 
+    estimate_stats : bool
+        If True, estimate t-statistics and p-values for the betas (can take a while)
+
     Returns
     -------
     evokeds : dict
@@ -231,11 +235,16 @@ def ridge_regression_raw(
     evokeds, regressor_indices = _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info)
 
     # get stats
-    stats = ridge_stats(fitted, X, data.T)
-    stats['regressor_indices'] = regressor_indices
-    # unpack certain stats by condition
-    for key in ["betas", "t-stats", "p-values"]:
-        stats[key] = {cond: stats[key][:,idx[0]:idx[1]] for cond, idx in regressor_indices.items()}
+    if estimate_stats:
+        stats = ridge_stats(fitted, X, data.T)
+        stats['regressor_indices'] = regressor_indices
+        # unpack certain stats by condition
+        for key in ["betas", "t-stats", "p-values"]:
+            stats[key] = {cond: stats[key][:,idx[0]:idx[1]] for cond, idx in regressor_indices.items()}
+    else:
+        stats = {}
+        stats['regressor_indices'] = regressor_indices
+        stats['betas'] = coefs
     return X, evokeds, stats
 
 

@@ -312,6 +312,7 @@ class BendingCollegeWav2Vec(BaseProcess):
             mask = _make_mask((batch_size, samples), self.mask_rate, samples, self.mask_span)
         else:
             mask = torch.zeros((batch_size, samples), requires_grad=False, dtype=torch.bool)
+            print(f'batch_size: {batch_size}, samples: {samples}, mask_rate: {self.mask_rate}, mask_span: {self.mask_span}')
             half_avg_num_seeds = max(1, int(samples * self.mask_rate * 0.5))
             if samples <= self.mask_span * half_avg_num_seeds:
                 raise ValueError("Masking the entire span, pointless.")

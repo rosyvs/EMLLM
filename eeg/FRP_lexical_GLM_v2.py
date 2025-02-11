@@ -350,7 +350,7 @@ for s in rERP_list:
         # baseline correct
         c=c.apply_baseline((-.1, 0))
         # downsample to 100Hz
-        c.resample(15)
+        c.resample(100)
         # check it contains CPz channel and skip if not
         if 'CPz' not in c.ch_names:
             print(f'{s} does not contain CPz, skipping')

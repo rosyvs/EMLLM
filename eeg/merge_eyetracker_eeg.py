@@ -48,7 +48,7 @@ eeg_trigger_df = pd.read_csv('../info/EEGtriggerSources.csv')
 # pIDs = sorted(list(set(pIDs)))
 # exclude = [20, 21, 22, 23, 24, 25, 26, 27, 31, 39, 40, 73, 77, 78, 87,88,93,99, 110,115,123,125, 138, 160, 164,167,168, 170,171,172,173, 175,176,177, 178,179] # ubj to exclude because no eeg or no trigger etc.
 # pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
-pIDs = [33, 159, 152,129,127,92,86]
+pIDs = [170,175, 176, 177]
 pIDs = [f'EML1_{p:03d}' for p in pIDs]
 # pIDs = pIDs[pIDs.index('EML1_180'):]# restart from
 

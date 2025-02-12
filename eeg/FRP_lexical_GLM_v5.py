@@ -23,6 +23,19 @@ os.chdir(dir_path)
 pd.options.mode.chained_assignment = None  # default='warn'
 plt.ioff()
 
+###########################################
+# v5: same as v4 but including stop words #
+###########################################
+# draw a cow in ascii
+# 
+# \   ^__^
+#  \  (oo)\_______
+#     (__)\       )\/\
+#         ||----w |
+#         ||     ||
+
+# %%
+
 #%% paths
 dir_raw = '/Volumes/Blue1TB/EyeMindLink/Data'
 dir_fif = '/Volumes/Blue1TB/EEG_processed/preprocessed_fif/'
@@ -31,29 +44,10 @@ dir_out_par = '/Volumes/Blue1TB/EEG_processed/'
 REDO = True
 FORCE_REDO = False
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
-decimation = 1 #TODO: set to 1 for final pass analysis
+decimation = 10 #TODO: set to 1 for final pass analysis
 ridge_alpha = 1
-verstr = f'FRP_TRF_lexical_v4_alpha{ridge_alpha}_decim{decimation}'
+verstr = f'FRP_TRF_lexical_v5_alpha{ridge_alpha}_decim{decimation}'
 dir_out = os.path.join(dir_out_par, verstr)
-# v3: after discussion on 2025-01-31
-
-# exclude subjects:
-# - with MW % <20% or >80%
-# - with overall comprehension score not different from chance
-# - with fewer than 60 fixations per condition (MW/non-MW) after filtering as below
-
-# stricter prepro: filter 0.5-15Hz, downsample to 100 Hz, reject windows with >120uV peak tp peak range
-# infill covariates after scaling with 0 not mean
-
-# only include the following fixation onsets:
-# - on an IA
-# - on content words
-# - 50-1000 ms duration
-# - inbound saccade amplitude within 3 stdev of mean
-
-# this version uses dummy coding for MW: intercept is FRP, MW=-1 and MW=0 are additional predictors
-# there will be separate columsn for each MW and lexical covariate
-# separate models for blink and screen change events too to remove them #TODO:
 
 os.makedirs(dir_out, exist_ok=True)
 dir_events = os.path.expanduser('~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/events/') # task events
@@ -254,7 +248,7 @@ if REDO:
             # drop fixations not on an IA 
             fixations = fixations[fixations['IA_ID']!=-1]
             # drop fixations on stop_words
-            fixations = fixations[fixations['stop_word']==0]
+            # fixations = fixations[fixations['stop_word']==0]
             fixations = fixations[~fixations['surprisal'].isna()]
             fixations = fixations[~fixations['word_freq'].isna()]
             fixations = fixations[~fixations['relative_word_position'].isna()]

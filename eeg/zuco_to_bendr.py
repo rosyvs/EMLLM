@@ -8,6 +8,8 @@ import pandas as pd
 from tqdm import tqdm
 import mne
 from functools import partial
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning)
 
 def load_zuco_bendr_channels():
     # detect if current dir is top level of repo or in subfolder eeg already
@@ -37,7 +39,7 @@ def get_bendr_feats_sent(sent_data, encoder, contextualizer, use_chan_ix, scaler
     with torch.no_grad():
         sent_enc = bendr_encoder(torch.tensor(sent_EEG_batch).unsqueeze(0).float())
         sent_context = bendr_contextualizer(sent_enc)
-    print(f'sent_enc shape: {sent_enc.shape}')
+    # print(f'sent_enc shape: {sent_enc.shape}')
     return sent_enc.squeeze().numpy(), sent_context.squeeze().numpy()
 
 def get_bendr_feats_fix_seq(fixations, encoder, contextualizer, use_chan_ix, scaler=None, downsampler=None):
@@ -78,7 +80,7 @@ def get_bendr_feats_fix_seq(fixations, encoder, contextualizer, use_chan_ix, sca
     # print(f'enc_batch_unpacked shape: {enc_batch_unpacked[0].shape}')
     with torch.no_grad():
         context_batch = bendr_contextualizer(enc_batch)
-    print(f'fixseq context_batch shape: {context_batch.shape}')
+    # print(f'fixseq context_batch shape: {context_batch.shape}')
     context_batch_unpacked = [context_batch[i,:,:].numpy() for i in range(context_batch.shape[0])]
     for i in range(len(fixations['EEG'])):
         if i not in fix_ix:
@@ -96,7 +98,7 @@ def bendr_prepro_zuco(data, bendr_encoder, bendr_contextualizer, use_chan_ix, re
     for sent_ix in tqdm(range(len(data))):
         if resume_from is not None and sent_ix < resume_from:
             continue
-        print(f'\n...Processing sentence {sent_ix}: {data[sent_ix].content}')
+        # print(f'\n...Processing sentence {sent_ix}: {data[sent_ix].content}')
         sent_data = data[sent_ix]
         fix_seq = sentence_to_fix_seq(sent_data)
         sent_enc, sent_enc_context = get_bendr_feats_sent(sent_data, bendr_encoder, bendr_contextualizer, use_chan_ix=use_chan_ix)

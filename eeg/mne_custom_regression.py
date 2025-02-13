@@ -74,7 +74,8 @@ def ridge_stats(model, X, y):
         'betas': beta,
         't-stats': t_stats,
         'mse': mse,
-        'p-values': p_values
+        'p-values': p_values,
+        'residuals': residuals
     }
     return stats_dict
 

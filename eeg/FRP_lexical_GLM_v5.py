@@ -60,7 +60,13 @@ pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_fif) if f.endswi
 pIDs = sorted(list(set(pIDs)))
 exclude = [20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 39, 40, 73, 77, 78, 87,88,93,99, 
     110,115,123,125, 138, 160, 164,167,168, 171,172,173, 178,179] # ubj to exclude because no eeg or no trigger etc.
-skip_reasons = {} if REDO else pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
+if REDO:
+    try:
+        skip_reasons = pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
+    except:
+        skip_reasons = {}
+else:
+    skip_reasons = {}
 skip_reasons = {f'EML1_{pID:03d}' : 'no eeg or no IAs' for pID in exclude}
 pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
 
@@ -411,7 +417,10 @@ if REDO:
 
 #%% read in already processed data
 pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_out) if f.endswith('_rERP-evk.fif')]
-skip_reasons = pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
+try:
+    skip_reasons = pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
+except:
+    skip_reasons = {}
 
 #%% screen subjects comrpehension scores
 comp_pat = ['Rote','Inf','Deep','SVT']
@@ -581,7 +590,7 @@ for cc in contrast_conds:
     F_obs, clusters, cluster_p_values, H0 = mne.stats.permutation_cluster_test(x, seed=42, 
     threshold = threshold_tfce , 
     out_type='mask', 
-    check_disjoint=True, verbose=True)
+    check_disjoint=True)
     if any (cluster_p_values < 0.05):
         print(f'{contrast_name} has significant clusters')
 

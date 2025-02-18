@@ -13,10 +13,14 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 import scipy
 from functools import partial
-from mne_custom_regression import ridge_regression_raw, ridge_model, plot_with_stats, plot_cluster, comprehension_above_chance
 import seaborn as sns
 sns.set_palette("tab10")
 import traceback
+
+import zuco_data
+from zuco_data import load_mat_file
+from mne_custom_regression import ridge_regression_raw, ridge_model, plot_with_stats, plot_cluster, comprehension_above_chance
+
 # get current dir to construct relative paths
 dir_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(dir_path)
@@ -33,55 +37,61 @@ FORCE_REDO = False
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
 decimation = 1 #TODO: set to 1 for final pass analysis
 ridge_alpha = 1
-verstr = f'FRP_TRF_lexical_v4_alpha{ridge_alpha}_decim{decimation}'
+verstr = f'ZuCo_FRP_TRF_lexical_decim{decimation}'
 dir_out = os.path.join(dir_out_par, verstr)
-# v3: after discussion on 2025-01-31
-
-# exclude subjects:
-# - with MW % <20% or >80%
-# - with overall comprehension score not different from chance
-# - with fewer than 60 fixations per condition (MW/non-MW) after filtering as below
-
-# stricter prepro: filter 0.5-15Hz, downsample to 100 Hz, reject windows with >120uV peak tp peak range
-# infill covariates after scaling with 0 not mean
-
-# only include the following fixation onsets:
-# - on an IA
-# - on content words
-# - 50-1000 ms duration
-# - inbound saccade amplitude within 3 stdev of mean
-
-# this version uses dummy coding for MW: intercept is FRP, MW=-1 and MW=0, refixation=1 are additional predictors
-# there will be separate columsn for each MW and lexical covariate
-# Blink and buttonpress are also in the design matrix 
-
 os.makedirs(dir_out, exist_ok=True)
-dir_events = os.path.expanduser('~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/events/') # task events
-ia_df = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv').rename(columns={'gpt2_surprisal_page':'surprisal'})
-# remove punctuation from IA_ID
-ia_df = ia_df.loc[~ia_df['punctuation']]
-ia_df['IA_ID'] = ia_df['IA_ID'].fillna('-1').astype(float).astype(int)
-ia_df['log_word_freq'] = ia_df['word_freq'].astype(float).apply(np.log).replace(-np.inf, np.nan)
 
-beh_df = pd.read_csv('~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/Behaviour/EML1_page_level.csv') # comp and MW scores
-eeg_trigger_df = pd.read_csv('../info/EEGtriggerSources.csv')
-fn_base = '_p.fif'
+# %% 
+path_to_zuco = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EEG-Gaze/ZuCo/osfstorage'
+subdir = 'task1- SR/Preprocessed/'
+sentences = load_mat_file(os.path.join(path_to_zuco, subdir, 'sentencesSR.mat'))['sentences']
+ia_df = pd.DataFrame()
 
-pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_fif) if f.endswith(fn_base)]
-# unique and sort
-pIDs = sorted(list(set(pIDs)))
-exclude = [20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 39, 40, 73, 77, 78, 87,88,93,99, 
-    110,115,123,125, 138, 160, 164,167,168, 171,172,173, 178,179] # ubj to exclude because no eeg or no trigger etc.
-skip_reasons = {} if REDO else pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
-skip_reasons = {f'EML1_{pID:03d}' : 'no eeg or no IAs' for pID in exclude}
-pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
+beh_df = pd.DataFrame()
 
-# #####
+pIDs = ['ZPH', 'ZKB','ZKH', 'ZDM', 'ZDN', 'ZJM','ZJ','ZKW','ZAB','ZJS', 'ZMG','ZGW']
 
-# pIDs = ['EML1_050', 'EML1_084', 'EML1_106', 'EML1_114', 'EML1_118', 'EML1_121', 'EML1_131', 'EML1_141', 'EML1_144', 'EML1_148', 'EML1_169', 'EML1_175']
-# resume_from = 'EML1_050'
-# pIDs = pIDs[pIDs.index(resume_from):]
-# #####
+
+#%% read raw ZuCo EEEG and ET
+
+
+for pID in pIDs:
+    # get EEG and ET files
+    pID_eeg_files = [f for f in os.listdir(os.path.join(path_to_zuco,subdir,pID)) if pID in f and 'EEG' in f]
+    pID_et_files = [f for f in os.listdir(os.path.join(path_to_zuco,subdir,pID)) if pID in f and 'ET' in f]
+
+    val_to_event = zuco_data.val_to_event(ver = 1, task=1)
+    pID_eeg_files = sorted(pID_eeg_files, key=get_block_no)
+    pID_et_files = sorted(pID_et_files, key=get_block_no)
+    # get block nos and checl each has eeg and et
+    block_nos = [get_block_no(f) for f in pID_eeg_files]
+    files_by_block = {}
+    for block_no in block_nos:
+        files_by_block[block_no] = {'EEG': None, 'ET': None}
+    for f in pID_eeg_files:
+        block_no = get_block_no(f)
+        files_by_block[block_no]['EEG']=f
+    for f in pID_et_files:
+        block_no = get_block_no(f)
+        files_by_block[block_no]['ET']=f
+
+    for b,files in files_by_block.items():
+        eeg_file = files['EEG']
+        et_file = files['ET']
+        print(eeg_file, et_file)
+        eeg = load_mat_file(os.path.join(path_to_zuco,subdir,pID, eeg_file))
+        et = load_mat_file(os.path.join(path_to_zuco,subdir,pID, et_file))
+        et_events = pd.DataFrame(et['event'], columns=['latency','event'])
+        fix_df = get_fix_df(et)
+        # merge events and fixations
+        fix_df = fix_df.merge(et_events, on='latency')
+        fix_df = label_fixations_with_event(et)
+        eeg['EEG']
+        mne_raw, events_df = mne_from_zucoeeg(eeg, event_dict=val_to_event)
+
+
+
+
 
 #%% Loop over subjects
 cond_counts_all = []

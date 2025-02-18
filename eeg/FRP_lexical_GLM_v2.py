@@ -13,7 +13,7 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 import scipy
 from functools import partial
-from mne_custom_regression import ridge_regression_raw
+from mne_custom_regression import ridge_regression_raw, ridge_model, plot_with_stats, plot_cluster, comprehension_above_chance
 import seaborn as sns
 sns.set_palette("tab10")
 import traceback
@@ -71,74 +71,6 @@ pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
 # resume_from = 'EML1_070'
 # pIDs = pIDs[pIDs.index(resume_from):]
 # #####
-
-# wrap solver in a function to make it a callable
-def ridge_solver(X, y, alpha=1): 
-    res = Ridge(solver='auto',alpha=alpha).fit(X, y).coef_ #TODO: what else comes from Ridge
-    if len(res.shape)==1:
-        res = np.expand_dims(res, axis=0)
-    return res
-def ridge_model(X, y, solver='auto', alpha=1):
-    res = Ridge(solver=solver,alpha=alpha).fit(X, y)
-    return res
-# plot sig ranges
-def plot_with_stats(evk, pvals, channel='CPz', ax=None, alpha=0.05):
-    erp_times = evk.times
-    condname =  evk.comment
-    channels = evk.ch_names
-    if isinstance(channel, str):
-        chan_ix = channels.index(channel)
-    else:
-        chan_ix = channel
-    if ax is None:
-        fig, ax = plt.subplots(1,1, figsize=(12, 6))
-    evk.plot(picks=channels[chan_ix], axes=ax)
-    # make bool array for if p<0.05
-    sig = pvals[chan_ix] < alpha
-    if np.any(sig):
-        # consolidate ranges: find changepoints in sig
-        changepoints = np.where(np.diff(sig))[0]
-        if sig[0]:
-            changepoints = np.concatenate([[0], changepoints])
-        if sig[-1]:
-            changepoints = np.concatenate([changepoints, [len(sig)]])
-        assert len(changepoints) % 2 == 0
-        # make list of start and end points from successive pairs
-        ranges = np.array([[changepoints[i], changepoints[i+1]] for i in range(0,len(changepoints),2)])
-        # colour significant effects with shaded background
-        for i, p in enumerate(ranges):
-            ax.axvspan(erp_times[p[0]], erp_times[p[1]], color='r', alpha=0.3)
-    return ax
-
-def plot_cluster(clusters, cluster_p_values, times, ax, tcfe=False): #TODO output is different for tcfe - modify plot fn
-    h=None
-    for i_c, c in enumerate(clusters):
-        if cluster_p_values[i_c] <= 0.05:
-            h = ax.axvspan(times[c[0]][0], times[c[0]][-1],color="r", alpha=0.3)
-    if h:
-        ax.legend((h,), ("cluster p-value < 0.05",))
-    # ax.set_xlabel("time (ms)")
-    # ax.set_ylabel("stat")
-    return ax
-
-def comprehension_above_chance(x,n):
-    pvals = []
-    weights=[]
-    for n_i in np.unique(n):
-        x_i = x[n==n_i]
-        p = 1/n_i
-        # binomial test
-        res = scipy.stats.binomtest(x_i.sum(), n=len(x_i), p=p)
-        if res.pvalue > 0.05:
-            print(f'performance on {n_i} alternatives is {x_i.sum()}/{len(x_i)} ({x_i.sum()/len(x_i):.2f}) which is not different from chance (p={res.pvalue:.2f})')
-        else:
-            print(f'performance on {n_i} alternatives is {x_i.sum()}/{len(x_i)} ({x_i.sum()/len(x_i):.2f}) which is different from chance (p={res.pvalue:.2f})')
-        pvals += [res.pvalue]
-        weights += [len(x_i)]
-    # weighted mean p value
-    res = scipy.stats.combine_pvalues(pvals, method='stouffer', weights = weights)
-    return pvals, res
-
 
 
 #%% Loop over subjects

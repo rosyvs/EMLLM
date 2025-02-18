@@ -77,7 +77,17 @@ def sentence_to_fix_seq(data, sent_ix):
     word_fixation_sequence = {'content': sent.content, 'fixations': fixations, 'EEG': fix_EEG}
     return word_fixation_sequence
 
-# %% get fixation sequence from sentence structure, i.e. ordered by time not word
+#%% TODO:  TODO: TODO: TODO: TODO: TODO: TODO: TODO: TODO: TODO: TODO: 
+# The field “allFixations” contains information about all fixations which occurred between onset and offset of the sentence (including fixations outside of wordbounds). 
+sent.allFixations.x
+sent.allFixations.y
+sent.allFixations.duration
+sent.allFixations.pupilsize
+all_fixations = pd.DataFrame({'x':sent.allFixations.x, 'y':sent.allFixations.y, 'duration':sent.allFixations.duration, 'pupilsize':sent.allFixations.pupilsize})
+# OK very nice but what about onset times? EEG? this is still incomplete for crossref with rawEEG
+
+
+# # %% get fixation sequence from sentence structure, i.e. ordered by time not word
 fix_seq = []
 for i, word in enumerate(sent.word):
     if word.nFixations > 0:
@@ -203,10 +213,7 @@ egeeg = egeeg[:,use_chan_ix]
 
 # add additional channel for scale, set to all 0 for now
 egeeg = np.concatenate([egeeg, np.zeros((egeeg.shape[0],1))], axis=1).T
-
 egeeg_batch = torch.tensor(egeeg).unsqueeze(0).float()
-
-
 with torch.no_grad():
     enc = bendr_encoder(torch.tensor(egeeg_batch))
 
@@ -248,10 +255,117 @@ sentence_bendr = {'content': sent.content, 'bendr_EEG_enc': sent_enc.numpy(), 'b
 'word_fixation_sequence': word_fixation_sequence}
 sentence_bendr['source_filename'] = file_name   
 
-#%% load a pkl of extracted  features
+#%% load a pkl of extracted BENDRE features
 import pickle
 fn = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EEG-Gaze/ZuCo/BENDR/task1/resultsZKB_SR_bendr.pkl'
 with open(fn, 'rb') as f:
     data = pickle.load(f)
 
+
+
+
+
+
+
+
+
+#%% TOOLS FOR ZUCO RAW DATA
+import re
+from mne.io.eeglab.eeglab import _check_load_mat, RawEEGLAB, _read_annotations_eeglab
+
+# order by the digit before _EEG or _ET
+def get_block_no(f):
+    # pattern is integer before _EEG or _ET but there can be other _ in the filename
+    ans = re.search(r'.*(\d+).*_E[ET].*', f)
+    return int(ans.group(1)) if ans else None
+
+def get_fix_df(et):
+    cols = et['eyeevent'].fixations.colheader
+    data = et['eyeevent'].fixations.data
+    df = pd.DataFrame(data, columns=cols)
+    df['latency'] = df['latency'].astype(int)
+
+    return df
+def label_fixations_with_event(et):
+    # get fixations
+    fix_df = get_fix_df(et)
+    # get events
+    et_events = pd.DataFrame(et['event'], columns=['latency','event'])
+    # et_events contains onsets of events, label all fixatoins with latency of event they follow
+    fix_df['event'] = np.nan
+    for i, fix in fix_df.iterrows():
+        # get event after this fixation
+        event = et_events[et_events['latency'] > fix['latency']].iloc[0]
+        fix_df.at[i,'event'] = event['event'].astype(int)
+    return fix_df
+
+def mne_from_zucoeeg(eeg, event_dict=None):
+    # convert zuco eeg to mne
+    # eeg: zuco eeg data
+    # returns mne raw object
+    eeg = _check_load_mat(os.path.join(path_to_zuco,subdir,pID, eeg_file), uint16_codec=None)
+    sfreq = eeg.srate
+    print('sfreq:', sfreq)
+    times = eeg.times
+    ch_names = eeg.chanlocs['labels']
+    ch_types = ['eeg']*len(ch_names)
+    # sfreq = 500
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types=ch_types)
+    raw = mne.io.RawArray(eeg.data, info)
+    # get events
+    events = pd.DataFrame(eeg.event)
+    events['value'] = events['type'].astype(int) # IDK why this is just 'trigger'
+    # get description as a string if event_dict is not None
+    if event_dict is not None:
+        events['type'] = events['value'].map(event_dict)
+    annot = mne.Annotations(onset=np.array(events['latency'])/sfreq, duration=np.array(events['duration'])/sfreq, description=events['type'])
+    raw.set_annotations(annot)
+    return raw, events
+
+
+#%% read raw ZuCo EEEG and ET
+path_to_zuco = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EEG-Gaze/ZuCo/osfstorage'
+subdir = 'task1- SR/Preprocessed/'
+pID = 'ZKB'
+pID_eeg_files = [f for f in os.listdir(os.path.join(path_to_zuco,subdir,pID)) if pID in f and 'EEG' in f]
+pID_et_files = [f for f in os.listdir(os.path.join(path_to_zuco,subdir,pID)) if pID in f and 'ET' in f]
+
+# epochs
+val_to_event = {10: 'sentence_onset',
+ 11: 'sentence_offset',
+ 12: 'control_onset',
+ 13: 'control_offset_question_onset',
+ 15: 'question_answered',
+ 100:'start',
+ 102: 'start',
+ 18:'end',
+ 22: 'end'}
+#%%
+pID_eeg_files = sorted(pID_eeg_files, key=get_block_no)
+pID_et_files = sorted(pID_et_files, key=get_block_no)
+# get block nos and checl each has eeg and et
+block_nos = [get_block_no(f) for f in pID_eeg_files]
+files_by_block = {}
+for block_no in block_nos:
+    files_by_block[block_no] = {'EEG': None, 'ET': None}
+for f in pID_eeg_files:
+    block_no = get_block_no(f)
+    files_by_block[block_no]['EEG']=f
+for f in pID_et_files:
+    block_no = get_block_no(f)
+    files_by_block[block_no]['ET']=f
+
+for b,files in files_by_block.items():
+    eeg_file = files['EEG']
+    et_file = files['ET']
+    print(eeg_file, et_file)
+    eeg = load_mat_file(os.path.join(path_to_zuco,subdir,pID, eeg_file))
+    et = load_mat_file(os.path.join(path_to_zuco,subdir,pID, et_file))
+    et_events = pd.DataFrame(et['event'], columns=['latency','event'])
+    fix_df = get_fix_df(et)
+    # merge events and fixations
+    fix_df = fix_df.merge(et_events, on='latency')
+    fix_df = label_fixations_with_event(et)
+    eeg['EEG']
+    mne_raw, events_df = mne_from_zucoeeg(eeg, event_dict=val_to_event)
 # %%

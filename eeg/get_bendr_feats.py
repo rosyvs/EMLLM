@@ -1,7 +1,9 @@
 import os
 import numpy as np
 import pandas as pd
-from bendr import ConvEncoderBENDR, BENDRContextualizer, BendingCollegeWav2Vec
+import sys
+sys.path.append('..')
+from eeg.bendr import ConvEncoderBENDR, BENDRContextualizer, BendingCollegeWav2Vec
 import torch
 import tqdm
 import argparse

@@ -83,9 +83,16 @@ sent.allFixations.x
 sent.allFixations.y
 sent.allFixations.duration
 sent.allFixations.pupilsize
+# use sent.wordbounds to get fixations within word bounds
+bounds['word'] = sent.content.split()
 all_fixations = pd.DataFrame({'x':sent.allFixations.x, 'y':sent.allFixations.y, 'duration':sent.allFixations.duration, 'pupilsize':sent.allFixations.pupilsize})
 # OK very nice but what about onset times? EEG? this is still incomplete for crossref with rawEEG
-
+et_cols = ['TIME' 'L_GAZE_X' 'L_GAZE_Y' 'L_AREA'] # i'm inferring this from teh matlab script firstLevel_SR.m but could bewrong
+# is it plausiblethat first column of rawET is timestmaps?
+sent.word[0].rawET[0][0] 
+# successive diff
+np.diff(sent.word[0].rawET[0][0]) 
+# yes- this is consistent with time in ms, as successive diff is 2 and ET sampelrate is 500Hz
 
 # # %% get fixation sequence from sentence structure, i.e. ordered by time not word
 fix_seq = []
@@ -103,6 +110,7 @@ fix_seq = sorted(fix_seq, key=lambda x: x[1])
 fixations = pd.DataFrame(fix_seq, columns=['word_ix','fix_ix'])
 fixations.set_index('fix_ix', inplace=True)
 fixations['count_on_word']= fixations.groupby('word_ix').cumcount()
+
 # append EEG to fixation sequence
 fix_EEG = []
 for i, row in fixations.iterrows():
@@ -111,7 +119,13 @@ for i, row in fixations.iterrows():
 fix_ET = []
 for i, row in fixations.iterrows():
     fix_ET.append(sent.word[row['word_ix']].rawET[row['count_on_word']])
-word_fixation_sequence = {'content': sent.content, 'fixations': fixations, 'EEG': fix_EEG}
+    fix_onset = fix_ET[-1][0][0]
+    fix_offset = fix_ET[-1][0][-1]
+    fix_dur_check = fix_offset - fix_onset
+    fixations.at[i,'fix_onset_etms'] = fix_onset
+    fixations.at[i,'fix_offset_etms'] = fix_offset
+    print(fix_dur_check)
+word_fixation_sequence = {'content': sent.content, 'fixations': fixations, 'EEG': fix_EEG, 'ET': fix_ET}
 
 # %%
 from torch.nn.functional import interpolate
@@ -368,4 +382,6 @@ for b,files in files_by_block.items():
     fix_df = label_fixations_with_event(et)
     eeg['EEG']
     mne_raw, events_df = mne_from_zucoeeg(eeg, event_dict=val_to_event)
+
+
 # %%

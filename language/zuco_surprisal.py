@@ -23,7 +23,10 @@ from lexical import strip_punc, remove_punc, agg_suprisal_to_words, remove_space
 path_to_zuco = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EEG-Gaze/ZuCo/osfstorage'
 subdir = 'task1- SR/Preprocessed/'
 sentences = load_mat_file(os.path.join(path_to_zuco, subdir, 'sentencesSR.mat'))['sentences']
-
+# save to txt
+with open(os.path.join(path_to_zuco, subdir, 'sentencesSR.txt'), 'w') as f:
+    for s in sentences:
+        f.write(s + '\n')
 sentences = pd.DataFrame({"Text": sentences})
 sentences["sentence_ix"] = sentences.index
 sentences['Text2'] = sentences['Text'].str.replace(r'([.,!?])', r' \1', regex=True)

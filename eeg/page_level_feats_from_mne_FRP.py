@@ -7,21 +7,22 @@ import matplotlib.pyplot as plt
 import glob
 import os
 
-def get_stats_for_win(win, data, times):
+def get_stats_for_win(win, data, times, rms=False):
     # data is trials * time
     sel = np.where((win[0] <= np.array(times)) & (np.array(times) <= win[1]))[0]
     y = data[:,sel]
     win_stats={}
     win_stats['max'] = np.max(y, axis=1)
-    win_stats['min'] = np.min(y, axis=1)
-    win_stats['max_abs'] = np.max(np.abs(y), axis=1)
+    win_stats['mean'] = np.mean(y, axis=1)
     ix = np.argmax(y, axis=1)
     win_stats['max_lat'] = [times[sel[i]] for i in ix]
-    ix = np.argmax(np.abs(y), axis=1)
-    win_stats['max_abs_lat'] = [times[sel[i]] for i in ix]
-    win_stats['min_lat'] = [times[sel[i]] for i in np.argmin(y, axis=1)]
-    win_stats['zero_crossings'] = np.sum(np.diff(np.sign(y), axis=1) != 0, axis=1)
-    win_stats['mean'] = np.mean(y, axis=1)
+    if not rms: # only positive feats make sense for RMS
+        win_stats['min'] = np.min(y, axis=1)
+        win_stats['max_abs'] = np.max(np.abs(y), axis=1)
+        ix = np.argmax(np.abs(y), axis=1)
+        win_stats['max_abs_lat'] = [times[sel[i]] for i in ix]
+        win_stats['min_lat'] = [times[sel[i]] for i in np.argmin(y, axis=1)]
+        win_stats['zero_crossings'] = np.sum(np.diff(np.sign(y), axis=1) != 0, axis=1)
     return win_stats
 
 # %% Get FRP data
@@ -33,8 +34,11 @@ os.makedirs(os.path.join(dir_in,featdir), exist_ok=True)
 FRPall = []
 FRPavg = []
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
-channel_combos = {'AFFave':['AFF5h','AFF6h'],'CCPave':['CCP5h','CCP6h'],'PPOave':['PPO9h','PPO10h']}
+channel_combos = {'AFFave':['AFF5h','AFF6h'],'CCPave':['CCP5h','CCP6h'],'PPOave':['PPO9h','PPO10h'],
+'RMS_all':['CPz','FCz','AFF5h','AFF6h','CCP5h','CCP6h','PPO9h','PPO10h']} # string 'rms' in combo key will trigger RMS instead ofmean as agg func
+
 windows = {'P1': [70, 120], 'N1': [140, 280], 'N400': [300, 500]}
+
 
 stats_all = []
 for pID in pIDs:
@@ -67,9 +71,12 @@ for pID in pIDs:
             data = data_dict[channel].values
             data_array.append(data)
         data_array = np.array(data_array)
-        data = np.mean(data_array, axis=0)
+        if 'rms' in combo_label.lower():
+            data = np.sqrt(np.mean(data_array**2, axis=0))
+        else:   
+            data = np.mean(data_array, axis=0)
         for win_label, win in windows.items():
-            res = get_stats_for_win(win, data, times)
+            res = get_stats_for_win(win, data, times, rms=('rms' in combo_label.lower()))
             # add columns to stats, prepend channel name an windown name
             for k, v in res.items():
                 cols_to_add[f'{win_label}_{combo_label}_{k}'] = v
@@ -104,8 +111,8 @@ feats = ['N400_CPz_mean', 'N400_CPz_min', 'N400_CPz_min_lat', 'N400_CPz_max_abs'
         'N400_FCz_mean', 'N400_FCz_min', 'N400_FCz_min_lat', 'N400_FCz_max_abs','N400_FCz_max_abs_lat',
         'P1_PPOave_mean', 'P1_PPOave_max', 'P1_PPOave_max_lat', 'P1_PPOave_max_abs', 'P1_PPOave_max_abs_lat',
         'N1_PPOave_mean', 'N1_PPOave_max', 'N1_PPOave_max_lat', 'N1_PPOave_max_abs', 'N1_PPOave_max_abs_lat',
-
-        'surprisal', 'word_freq'
+        'duration_sec','fix_pupilAvg',
+        'surprisal', 'word_freq',
 ]
 stats_fmt = stats_fmt[identifiers + feats]
 
@@ -146,6 +153,10 @@ correlation_feats = {
     'word_freq~N1_PPOave_max': ['N1_PPOave_max', 'word_freq'],
     'surprisal~N1_PPOave_max_lat': ['N1_PPOave_max_lat', 'surprisal'],
     'word_freq~N1_PPOave_max_lat': ['N1_PPOave_max_lat', 'word_freq'],
+    'surprisal~duration_sec': ['duration_sec', 'surprisal'],
+    'word_freq~duration_sec': ['duration_sec', 'word_freq'],
+    'surprisal~fix_pupilAvg': ['fix_pupilAvg', 'surprisal'],
+    'word_freq~fix_pupilAvg': ['fix_pupilAvg', 'word_freq'],
 }
 for k, v in correlation_feats.items():
     # group by identifiers and compute correlation

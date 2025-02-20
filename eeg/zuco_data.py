@@ -10,23 +10,35 @@ import numpy as np
 import sys
 sys.path.append('..')
 from eeg.get_bendr_feats import init_pretrained_bendr_encoder
-bendr_encoder, bendr_contextualizer = init_pretrained_bendr_encoder()
 
-def load_mat_file(file_name):
+# global varas
+global ZUCO_ET_SRATE
+ZUCO_ET_SRATE = 500
+
+# suppress warnings from pymatreader
+import warnings
+warnings.filterwarnings("ignore", module='pymatreader')
+
+def load_mat_file(file_name, verbose=False):
     try:
         data = io.loadmat(file_name, squeeze_me=True, struct_as_record=False)
-        print(f'Loaded data using io.loadmat')
+        if verbose:
+            print(f'Loaded data using io.loadmat')
     except Exception as e:
-        print(f'Failed to load using io.loadmat: {e}')
+        if verbose:
+            print(f'Failed to load using io.loadmat: {e}')
         try:
             data = mat73.loadmat(file_name)
-            print(f'Loaded data using mat73.loadmat')
+            if verbose:
+                print(f'Loaded data using mat73.loadmat')
         except:
-            print(f'Failed to load using mat73.loadmat')
+            if verbose:
+                print(f'Failed to load using mat73.loadmat')
             data = h5py.File(file_name, 'r')
-    print(f'loaded data of type {type(data)}, length {len(data)}')
-    if isinstance(data, dict):
-        print(f'keys: {data.keys()}')
+    if verbose:
+        print(f'loaded data of type {type(data)}, length {len(data)}')
+        if isinstance(data, dict):
+            print(f'keys: {data.keys()}')
     return data
 
 
@@ -51,6 +63,7 @@ def sentence_to_fix_seq(sent):
     fixations = pd.DataFrame(fix_seq, columns=['word_ix','fix_ix'])
     fixations.set_index('fix_ix', inplace=True)
     fixations['count_on_word']= fixations.groupby('word_ix').cumcount()
+    fixations['word'] = fixations['word_ix'].apply(lambda x: sent.word[x].content)
     # append EEG to fixation sequence
     fix_EEG = []
     for i, row in fixations.iterrows():
@@ -58,8 +71,20 @@ def sentence_to_fix_seq(sent):
     # append eyetracker data to fixation sequence
     fix_ET = []
     for i, row in fixations.iterrows():
-        fix_ET.append(sent.word[row['word_ix']].rawET[row['count_on_word']])
-    word_fixation_sequence = {'content': sent.content, 'fixations': fixations, 'EEG': fix_EEG}
+        rawET = sent.word[row['word_ix']].rawET[row['count_on_word']]
+        fix_ET.append(rawET)
+        if rawET is not None and len(rawET) > 0:
+            # append eyetracker data to fixation sequence
+            fix_onset = fix_ET[-1][0][0]
+            fix_offset = fix_ET[-1][0][-1]
+            fixations.at[i,'fix_onset_latency'] = fix_onset
+            fixations.at[i,'fix_offset_latency'] = fix_offset
+            fixations.at[i,'fix_duration'] = fix_offset - fix_onset
+        else:
+            fixations.at[i,'fix_onset_latency'] = None
+            fixations.at[i,'fix_offset_latency'] = None
+            fixations.at[i,'fix_duration'] = None
+    word_fixation_sequence = {'content': sent.content, 'fixations': fixations, 'EEG': fix_EEG, 'ET': fix_ET}
     return word_fixation_sequence
 
 def get_min_max_sentenceData(data):
@@ -88,31 +113,29 @@ def get_block_no(f):
 
 def get_fix_df(et):
     cols = et['eyeevent'].fixations.colheader
-    data = et['eyeevent'].fixations.data
+    data = et['eyeevent'].fixations.data 
     df = pd.DataFrame(data, columns=cols)
-    df['latency'] = df['latency'].astype(int)
-
+    df['latency_sec'] = df['latency']/ZUCO_ET_SRATE
+    df['duration'] = df['endtime'] - df['latency'] # duration col from data is definitely not duration, it could be some weirdf windows timestamp?? 
     return df
-def label_fixations_with_event(et):
-    # get fixations
-    fix_df = get_fix_df(et)
-    # get events
-    et_events = pd.DataFrame(et['event'], columns=['latency','event'])
+
+def label_fixations_with_event(fix_df, et_events):
     # et_events contains onsets of events, label all fixatoins with latency of event they follow
-    fix_df['event'] = np.nan
+    fix_df['value'] = np.nan
     for i, fix in fix_df.iterrows():
         # get event after this fixation
-        event = et_events[et_events['latency'] > fix['latency']].iloc[0]
-        fix_df.at[i,'event'] = event['event'].astype(int)
+        event = et_events[et_events['latency'] < fix['latency']].iloc[-1]
+        fix_df.at[i,'value'] = event['value']
+        if 'event' in event.keys():
+            fix_df.at[i,'event'] = event['event']
     return fix_df
 
-def mne_from_zucoeeg(eeg, event_dict=None):
+def mne_from_zucoeeg(eeg_path, event_dict=None):
     # convert zuco eeg to mne
     # eeg: zuco eeg data
     # returns mne raw object
-    eeg = _check_load_mat(os.path.join(path_to_zuco,subdir,pID, eeg_file), uint16_codec=None)
+    eeg = _check_load_mat(eeg_path, uint16_codec=None)
     sfreq = eeg.srate
-    print('sfreq:', sfreq)
     times = eeg.times
     ch_names = eeg.chanlocs['labels']
     ch_types = ['eeg']*len(ch_names)
@@ -122,6 +145,8 @@ def mne_from_zucoeeg(eeg, event_dict=None):
     # get events
     events = pd.DataFrame(eeg.event)
     events['value'] = events['type'].astype(int) # IDK why this is just 'trigger'
+    events['latency'] = events['latency'].astype(int)
+    events['latency_sec'] = events['latency']/sfreq
     # get description as a string if event_dict is not None
     if event_dict is not None:
         events['type'] = events['value'].map(event_dict)

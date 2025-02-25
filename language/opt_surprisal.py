@@ -110,8 +110,8 @@ sns.scatterplot(data=ia_label_mapping, x='gpt2_surprisal_page', y='opt-125m_surp
 plt.title('Surprisal values')
 plt.subplot(2,1,2)
 sns.scatterplot(data=ia_label_mapping, x='opt-125m_surprisal_wholetext', y='opt-125m_surprisal_page')
-
+ia_label_mapping['gpt2_surprisal_page'].hist(bins=100)
 #%% final save
 ia_label_mapping.to_csv('../info/ia_label_mapping_opt_surprisal.csv', index=False)   
-
+ia_label_mapping= pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
 

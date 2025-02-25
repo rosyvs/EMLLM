@@ -29,16 +29,16 @@ with open(os.path.join(path_to_zuco, subdir, 'sentencesSR.txt'), 'w') as f:
         f.write(s + '\n')
 sentences = pd.DataFrame({"Text": sentences})
 sentences["sentence_ix"] = sentences.index
-sentences['Text2'] = sentences['Text'].str.replace(r'([.,!?])', r' \1', regex=True)
-sentences['IA_LABEL'] = sentences['Text2'].str.split(' ')
+# sentences['Text2'] = sentences['Text'].str.replace(r'([.,!?])', r' \1', regex=True)
+sentences['IA_LABEL'] = sentences['Text'].str.split(' ')
 # strip punc of fwords, but keep sole punctuation items
 ia_label_mapping = sentences.explode('IA_LABEL') # IA_LABEL includes punctuation
 ia_label_mapping['IA_INDEX'] = ia_label_mapping.groupby('sentence_ix').cumcount()
 ia_label_mapping['punctuation'] = ia_label_mapping['IA_LABEL'].apply(lambda x: x in ['.', ',', '...','--','_','!', '?', ':', ';', '(', ')', '"', "'"])
 # split on hyphens and explode again
-ia_label_mapping['word'] = ia_label_mapping['IA_LABEL'].str.split('-').str.split('--')
-ia_label_mapping = ia_label_mapping.explode('word')
-ia_label_mapping['word'] = ia_label_mapping['word'].apply(strip_punc)
+# ia_label_mapping['word'] = ia_label_mapping['IA_LABEL'].str.split('-')
+# ia_label_mapping = ia_label_mapping.explode('word')
+ia_label_mapping['word'] = ia_label_mapping['IA_LABEL'].apply(strip_punc)
 ia_label_mapping['identifier'] = ia_label_mapping['sentence_ix'].apply(lambda x: f'sentence{x:03d}')
 ia_label_mapping.drop_duplicates(inplace=True)
 # drop rows with emoty string or na in word
@@ -119,5 +119,10 @@ ia_label_mapping = add_surprisal_col(ia_label_mapping, 'sentence_ix', m, tokeniz
 ia_label_mapping.to_csv('../info/zuco_gpt_surprisal.csv', index=False)   
 
 
+
+# %% histograms of surprisal
+import matplotlib.pyplot as plt
+ia_label_mapping = pd.read_csv('../info/zuco_gpt_surprisal.csv')
+ia_label_mapping['gpt2_surprisal'].hist(bins=100)
 
 # %%

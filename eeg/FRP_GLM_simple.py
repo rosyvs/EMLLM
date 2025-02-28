@@ -53,7 +53,7 @@ FORCE_REDO = True
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
 decimation = 10 #TODO: set to 1 for final pass analysis
 ridge_alpha = 1
-verstr = f'FRP_GLM_simple_decim{decimation}'
+verstr = f'FRP_GLM_simple_decim{decimation}_cleaned'
 dir_out = os.path.join(dir_out_par, verstr)
 
 os.makedirs(dir_out, exist_ok=True)
@@ -186,7 +186,7 @@ if REDO:
             print(f'length before drop duplicates: {len(events_to_model)}')
             events_to_model = events_to_model.drop_duplicates(subset=['eeg_sample_decim'])
             print(f'length after drop duplicates: {len(events_to_model)}')
-                    # get covariates back oput of events now dupes have been droped
+            # get covariates back oput of events now dupes have been droped
             covariates = events_to_model.loc[:,['eeg_sample'] + gaze_covariates]
             # scale and center copntinuous covariates (lex, gaze) but leave MW/refixations as is
             covariates.loc[:,gaze_covariates] = covariates.loc[:,gaze_covariates].apply(lambda x: (x-x.mean())/x.std(), axis=0)
@@ -228,7 +228,7 @@ if REDO:
                 continue
             ##### save stats
             save_fn = os.path.join(dir_out, f'{pID}_rERP_stats.npz')
-            np.savez(save_fn, **stats)
+            np.savez(save_fn, **stats, X=X)
 
             ##### get residuals
             resid = stats['residuals']
@@ -237,7 +237,7 @@ if REDO:
             trl_decim = trl_to_model.copy()
             trl_decim[:, 0] -= EEG.first_samp
             trl_decim[:, 0] //= decimation       
-            info = mne.create_info(ch_names=EEG.ch_names[0:8], sfreq=EEG.info['sfreq']//decimation, ch_types='eeg')
+            info = mne.create_info(ch_names=EEG.ch_names[0:len(channels)], sfreq=EEG.info['sfreq']//decimation, ch_types='eeg')
             y_pred_mne = mne.io.RawArray(y_pred.T, info)
             resid_mne = mne.io.RawArray(resid.T, info)
             # epock the residuals
@@ -253,6 +253,21 @@ if REDO:
             for ep in resid_epochs:
                 frp_dc_array.append(ep + frp_est)
             frp_dc_array = np.array(frp_dc_array)
+
+            # continuous data estimated by removing the blink/buttonrpess predictors
+            X_clean = X.copy()
+            # set to 0 any regrerssor corresponding to blink or buttonrpess
+            nuisance_vars = ['Blink', 'ButtonPress']
+            nuisance_ix = [stats['regressor_indices'][rv] for rv in nuisance_vars]
+            # these are ranges, make a lsit of indices from ranges
+            nuisance_ix = [i for ix in nuisance_ix for i in range(ix[0], ix[1])]
+            X_clean[:,nuisance_ix] = 0
+            # concatenate betas in the order given by regressor_indices
+            beta_array = np.zeros((len(channels),X_clean.shape[1]))
+            for evt,evix in stats['regressor_indices'].items():
+                beta_array[:,evix[0]:evix[1]] = stats['betas'][evt]
+
+            y_pred_clean = X_clean @ stats['betas'] # just blink and buttonpress events
 
             # # plot each epoch overlaif
             # fig, ax = plt.subplots(1,1, figsize=(12, 6))

@@ -31,6 +31,10 @@ pIDs =  [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_in) if 'dcFRP_e
 pIDs = sorted(list(set(pIDs)))
 featdir = 'FRP_stats'
 os.makedirs(os.path.join(dir_in,featdir), exist_ok=True)
+ia_label_mapping = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
+min_word_freq = np.min(ia_label_mapping.loc[ia_label_mapping['word_freq'] > 0, 'word_freq'])
+log_word_freq_fill_value = np.log(min_word_freq)-1
+
 FRPall = []
 FRPavg = []
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
@@ -80,16 +84,31 @@ for pID in pIDs:
             # add columns to stats, prepend channel name an windown name
             for k, v in res.items():
                 cols_to_add[f'{win_label}_{combo_label}_{k}'] = v
+        # z score the EEG min, mean and max features per participant
+    to_scale = [col for col in cols_to_add.keys() if re.search(r'mean|min|max', col) and not re.search(r'log|lat', col)]
+    for col in to_scale:
+        cols_to_add[col+'_Z'] = (cols_to_add[col] - cols_to_add[col].mean()) / cols_to_add[col].std()
+
     stats = pd.concat([stats, pd.DataFrame(cols_to_add)], axis=1)
     data_array =np.array( [data_dict[channel].values for channel in channels])
     FRPavg = np.mean(data_array, axis=1) # TODO: check axis
     FRPall.append(FRPavg)
     stats['ParticipantID'] = pID
     stats = pd.DataFrame(stats)
+    # log transform surprisal and freq
+    stats['log_word_freq'] = np.where(stats['word_freq'] > 0, np.log(stats['word_freq']), log_word_freq_fill_value)
+    
+    # count na rows and drop them
+    n_na = np.sum(stats.isna().any(axis=1))
+    if n_na > 0:    
+        print(f'{pID} has {n_na} rows with NaNs')
+        stats = stats.dropna()
+
     stats.to_csv(os.path.join(dir_in,featdir, f'{pID}_dcFRP_stats.csv'), index=False)
     stats_all.append(stats)
+
 stats_all = pd.concat(stats_all)
-# stats_all.to_csv(os.path.join(dir_in,featdir, f'ALL_dcFRP_stats.csv'), index=False)
+stats_all.to_csv(os.path.join(dir_in,featdir, f'ALL_dcFRP_stats.csv'), index=False)
 # %% make df with layout for Megan
 # read in stats per subj
 stats_all = []
@@ -110,9 +129,9 @@ identifiers = ['ParticipantID','Text','PageNum','TrialType','EVENT']
 feats = ['N400_CPz_mean', 'N400_CPz_min', 'N400_CPz_min_lat', 'N400_CPz_max_abs','N400_CPz_max_abs_lat',
         'N400_FCz_mean', 'N400_FCz_min', 'N400_FCz_min_lat', 'N400_FCz_max_abs','N400_FCz_max_abs_lat',
         'P1_PPOave_mean', 'P1_PPOave_max', 'P1_PPOave_max_lat', 'P1_PPOave_max_abs', 'P1_PPOave_max_abs_lat',
-        'N1_PPOave_mean', 'N1_PPOave_max', 'N1_PPOave_max_lat', 'N1_PPOave_max_abs', 'N1_PPOave_max_abs_lat',
+        'N1_PPOave_mean', 'N1_PPOave_min', 'N1_PPOave_min_lat', 'N1_PPOave_max_abs', 'N1_PPOave_max_abs_lat',
         'duration_sec','fix_pupilAvg',
-        'surprisal', 'word_freq',
+        'surprisal', 'log_word_freq', 
 ]
 stats_fmt = stats_fmt[identifiers + feats]
 
@@ -122,46 +141,97 @@ stats_pglevel = stats_fmt.groupby(identifiers).mean().reset_index()
 # compute correlations per page for certain feature combos
 correlation_feats = { 
     'surprisal~N400_CPz_max_abs': ['N400_CPz_max_abs', 'surprisal'],
-    'word_freq~N400_CPz_max_abs': ['N400_CPz_max_abs', 'word_freq'],
+    'log_word_freq~N400_CPz_max_abs': ['N400_CPz_max_abs', 'log_word_freq'],
     'surprisal~N400_CPz_mean': ['N400_CPz_mean', 'surprisal'],
-    'word_freq~N400_CPz_mean': ['N400_CPz_mean', 'word_freq'],
+    'log_word_freq~N400_CPz_mean': ['N400_CPz_mean', 'log_word_freq'],
     'surprisal~N400_CPz_min': ['N400_CPz_min', 'surprisal'],
-    'word_freq~N400_CPz_min': ['N400_CPz_min', 'word_freq'],
+    'log_word_freq~N400_CPz_min': ['N400_CPz_min', 'log_word_freq'],
     'surprisal~N400_CPz_min_lat': ['N400_CPz_min_lat', 'surprisal'],
-    'word_freq~N400_CPz_min_lat': ['N400_CPz_min_lat', 'word_freq'],
+    'log_word_freq~N400_CPz_min_lat': ['N400_CPz_min_lat', 'log_word_freq'],
     'surprisal~N400_FCz_max_abs': ['N400_FCz_max_abs', 'surprisal'],
-    'word_freq~N400_FCz_max_abs': ['N400_FCz_max_abs', 'word_freq'],
+    'log_word_freq~N400_FCz_max_abs': ['N400_FCz_max_abs', 'log_word_freq'],
     'surprisal~N400_FCz_mean': ['N400_FCz_mean', 'surprisal'],
-    'word_freq~N400_FCz_mean': ['N400_FCz_mean', 'word_freq'],
+    'log_word_freq~N400_FCz_mean': ['N400_FCz_mean', 'log_word_freq'],
     'surprisal~N400_FCz_min': ['N400_FCz_min', 'surprisal'],
-    'word_freq~N400_FCz_min': ['N400_FCz_min', 'word_freq'],
+    'log_word_freq~N400_FCz_min': ['N400_FCz_min', 'log_word_freq'],
     'surprisal~N400_FCz_min_lat': ['N400_FCz_min_lat', 'surprisal'],
-    'word_freq~N400_FCz_min_lat': ['N400_FCz_min_lat', 'word_freq'],
+    'log_word_freq~N400_FCz_min_lat': ['N400_FCz_min_lat', 'log_word_freq'],
     'surprisal~P1_PPOave_max_abs': ['P1_PPOave_max_abs', 'surprisal'],
-    'word_freq~P1_PPOave_max_abs': ['P1_PPOave_max_abs', 'word_freq'],
+    'log_word_freq~P1_PPOave_max_abs': ['P1_PPOave_max_abs', 'log_word_freq'],
     'surprisal~P1_PPOave_mean': ['P1_PPOave_mean', 'surprisal'],
-    'word_freq~P1_PPOave_mean': ['P1_PPOave_mean', 'word_freq'],
+    'log_word_freq~P1_PPOave_mean': ['P1_PPOave_mean', 'log_word_freq'],
     'surprisal~P1_PPOave_max': ['P1_PPOave_max', 'surprisal'],
-    'word_freq~P1_PPOave_max': ['P1_PPOave_max', 'word_freq'],
+    'log_word_freq~P1_PPOave_max': ['P1_PPOave_max', 'log_word_freq'],
     'surprisal~P1_PPOave_max_lat': ['P1_PPOave_max_lat', 'surprisal'],
-    'word_freq~P1_PPOave_max_lat': ['P1_PPOave_max_lat', 'word_freq'],
+    'log_word_freq~P1_PPOave_max_lat': ['P1_PPOave_max_lat', 'log_word_freq'],
     'surprisal~N1_PPOave_max_abs': ['N1_PPOave_max_abs', 'surprisal'],
-    'word_freq~N1_PPOave_max_abs': ['N1_PPOave_max_abs', 'word_freq'],
+    'log_word_freq~N1_PPOave_max_abs': ['N1_PPOave_max_abs', 'log_word_freq'],
     'surprisal~N1_PPOave_mean': ['N1_PPOave_mean', 'surprisal'],
-    'word_freq~N1_PPOave_mean': ['N1_PPOave_mean', 'word_freq'],
-    'surprisal~N1_PPOave_max': ['N1_PPOave_max', 'surprisal'],
-    'word_freq~N1_PPOave_max': ['N1_PPOave_max', 'word_freq'],
-    'surprisal~N1_PPOave_max_lat': ['N1_PPOave_max_lat', 'surprisal'],
-    'word_freq~N1_PPOave_max_lat': ['N1_PPOave_max_lat', 'word_freq'],
+    'log_word_freq~N1_PPOave_mean': ['N1_PPOave_mean', 'log_word_freq'],
+    'surprisal~N1_PPOave_min': ['N1_PPOave_min', 'surprisal'],
+    'log_word_freq~N1_PPOave_min': ['N1_PPOave_min', 'log_word_freq'],
+    'surprisal~N1_PPOave_min_lat': ['N1_PPOave_min_lat', 'surprisal'],
+    'log_word_freq~N1_PPOave_min_lat': ['N1_PPOave_min_lat', 'log_word_freq'],
     'surprisal~duration_sec': ['duration_sec', 'surprisal'],
-    'word_freq~duration_sec': ['duration_sec', 'word_freq'],
+    'log_word_freq~duration_sec': ['duration_sec', 'log_word_freq'],
     'surprisal~fix_pupilAvg': ['fix_pupilAvg', 'surprisal'],
-    'word_freq~fix_pupilAvg': ['fix_pupilAvg', 'word_freq'],
+    'log_word_freq~fix_pupilAvg': ['fix_pupilAvg', 'log_word_freq'],
 }
 for k, v in correlation_feats.items():
     # group by identifiers and compute correlation
     stats_pglevel[k] = stats_fmt.groupby(identifiers)[v].corr().iloc[0::2,-1].values
 
 stats_pglevel.to_csv(os.path.join(dir_in,featdir, f'ALL_dcFRP_stats_page_level.csv'), index=False)
+
+# %% plot some key pairs of features in scatter plots
+fig, axs = plt.subplots(2, 3, figsize=(12,12))
+to_plot=[['fix_pupilAvg', 'surprisal'],
+['fix_pupilAvg', 'log_word_freq'],
+['duration_sec', 'surprisal'],
+['duration_sec', 'log_word_freq'],
+['N400_CPz_mean_Z', 'surprisal'],
+['N400_CPz_mean_Z', 'log_word_freq'],
+]
+for i, (y,x) in enumerate(to_plot):
+    ax = axs.flatten()[i]
+    for pID in pIDs[0:10]:
+        stats = stats_all[stats_all['ParticipantID'] == pID]
+        ax.scatter(stats[x], stats[y], alpha=0.1, label=pID)    
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+# %% plot some key pairs of EEG features in scatter plots
+fig, axs = plt.subplots(2, 3, figsize=(12,12))
+to_plot=[['N400_CPz_max_abs_Z', 'surprisal'],
+['N400_CPz_max_abs_Z', 'log_word_freq'],
+['N400_CPz_max_abs_lat', 'surprisal'],
+['N400_CPz_max_abs_lat', 'log_word_freq'],
+['N400_CPz_mean_Z', 'surprisal'],
+['N400_CPz_mean_Z', 'log_word_freq'],
+]
+for i, (y,x) in enumerate(to_plot):
+    ax = axs.flatten()[i]
+    for pID in pIDs[0:10]:
+        stats = stats_all[stats_all['ParticipantID'] == pID]
+        ax.scatter(stats[x], stats[y], alpha=0.1, label=pID)
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+
+# %% same as above but color code by participant
+fig, axs = plt.subplots(2, 3, figsize=(12,12))
+to_plot=[['N400_CPz_max_abs', 'surprisal'],
+['N400_CPz_max_abs', 'log_word_freq'],
+['N400_CPz_max_abs_lat', 'surprisal'],
+['N400_CPz_max_abs_lat', 'log_word_freq'],
+['N400_CPz_mean', 'surprisal'],
+['N400_CPz_mean', 'log_word_freq'],
+]
+for i, (y,x) in enumerate(to_plot):
+    ax = axs.flatten()[i]
+    for pID in pIDs[0:10]:
+        stats = stats_all[stats_all['ParticipantID'] == pID]
+        ax.scatter(stats[x], stats[y], alpha=0.1, label=pID)
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    ax.legend()
 
 # %%

@@ -53,13 +53,17 @@ ia_df = ia_df.rename(columns = {'gpt2_surprisal':'surprisal'})
 
 beh_df = pd.DataFrame()
 
-pIDs = ['ZPH', 'ZKB','ZKH', 'ZDM', 'ZDN', 'ZJM','ZJ','ZKW','ZAB','ZJS', 'ZMG','ZGW']
-pIDs = ['ZPH']
-
+pIDs = [
+    # 'ZPH', 'ZKB',
+'ZKH', 'ZDM', 'ZDN', 'ZJM','ZJ','ZKW','ZAB','ZJS', 'ZMG','ZGW']
+# pIDs = ['ZPH']
+skip_reasons = {}
 #%% read raw ZuCo EEEG and ET
 def add_scalar_col(df, x, colname = 'block_no'):
     df[colname] = x
     return df
+
+EGImontage = mne.channels.make_standard_montage('GSN-HydroCel-129')
 for pID in pIDs:
     # read in sentenceData for htis subj and use to get word onsets to align  w raw EEG
     sentence_file = os.path.join(path_to_zuco, subdir_combined, 'results'+pID+'_SR.mat')
@@ -68,7 +72,7 @@ for pID in pIDs:
     for i,sent in enumerate(sentenceData):
         sequence = sentence_to_fix_seq(sent)
         sequence['sentence_disp_ix'] = i 
-        if not sequence['fixations'].empty:
+        if len(sequence['fixations'])>0:
             sequence['fixations']['sentence_disp_ix'] = i
             sequence['fixations']['Text'] = sequence['content']
             sequences.append(sequence)
@@ -103,6 +107,7 @@ for pID in pIDs:
         eeg_file = files['EEG']
         et_file = files['ET']
         print(eeg_file, et_file)
+        word_fixations_block = word_fixations.copy()
         if eeg_file and et_file:
             et = load_mat_file(os.path.join(path_to_zuco,subdir,pID, et_file))
             et_events = pd.DataFrame(et['event'], columns=['latency','value'])
@@ -135,7 +140,7 @@ for pID in pIDs:
             print(f'eeg_events_df latency range: {eeg_events_df["latency"].min()} - {eeg_events_df["latency"].max()}')
             print(f'word_fixations fix_onset_latency range: {word_fixations_block["fix_onset_latency"].min()} - {word_fixations_block["fix_onset_latency"].max()}')  
             # match with words from the sentenceData
-            word_fixations_block['eeg_latency'] = eeg_interpolator(word_fixations_block['fix_onset_latency']).astype(int)
+            word_fixations_block['eeg_latency'] = eeg_interpolator(word_fixations_block['fix_onset_latency'].astype(float)).astype(int)
             word_fixations_block['eeg_latency_sec'] = word_fixations_block['eeg_latency']/mne_raw.info['sfreq']
             # select only word fixations that correspond to the fixations in this block
             word_fixations_block = word_fixations_block[word_fixations_block['fix_onset_latency'].between(fix_df['latency'].min(), fix_df['latency'].max())].reset_index(drop=True)
@@ -148,7 +153,7 @@ for pID in pIDs:
             df_annot_event = pd.DataFrame({'onset': events['eeg_latency_sec'], 'duration': events['duration_sec'], 'description': events['identifier']})
             df_annot = pd.concat([df_annot_word, df_annot_event], ignore_index=True).reset_index(drop=True)
             annot = mne.Annotations(onset=df_annot['onset'], duration=df_annot['duration'], description=df_annot['description'])
-            block_data['rawEEG'] = mne_raw.set_annotations(annot_word_fix)
+            block_data['rawEEG'] = mne_raw.set_annotations(annot)
             block_data['rawET'] = et
             block_data['events'] = events
             block_data['fixations'] = fix_df
@@ -159,181 +164,165 @@ for pID in pIDs:
         else:
             print(f'!!!{pID} block {b} does not have both EEG and ET files')
 
-        #%%
-        task_events = pd.concat([add_scalar_col(b['events'], b['block_no']) for b in all_blocks])
-        fixations = pd.concat([add_scalar_col(b['fixations'], b['block_no']) for b in all_blocks])
-        word_fixations = pd.concat([add_scalar_col(b['word_fixations'], b['block_no']) for b in all_blocks])
-        EEG = mne.concatenate_raws([b['rawEEG'] for b in all_blocks])
-        # get back annotations from EEG now its been merged the timestmaps are different
-        annot_all = EEG.annotations.to_data_frame()
-        # onset is DateTimeArray but it shold just be seconds
-        annot_all['concat_eeg_latency_sec'] = (annot_all['onset'] - annot_all['onset'].iloc[0]).dt.total_seconds()
-        annot_all['concat_eeg_latency'] = annot_all['concat_eeg_latency_sec']*EEG.info['sfreq']
-        # merge with word_fixations on "description" col which is same as "identifier"
-        word_fixations = word_fixations.merge(annot_all, left_on='identifier', right_on='description', suffixes=('','_concatEEG'))
-        task_events = task_events.merge(annot_all, left_on='eeg_latency_sec', right_on='concat_eeg_latency_sec', suffixes=('','_concatEEG'))
-        task_events['event_type'] = 'ButtonPress'
-        task_events['task'] = np.where(task_events['eeg_value'].isin([10,11]), 'reading', 'other')
-        # common columns, any extra will be filled w nan
-        cols = ['event_type','task','sentence_ix','word_ix', 'count_on_word', 'identifier','word', 
-         'fix_duration','duration_sec', 'concat_eeg_latency','concat_eeg_latency_sec','block_no', 'gpt2_surprisal', 'log_word_freq', 'relative_word_position', 'stop_word']
-       
-        task_events = task_events[[c for c in cols if c in task_events.columns]]
-        word_fixations['event_type'] = 'Fixation'
-        word_fixations['task'] = 'reading'
-        word_fixations['duration_sec'] = word_fixations['fix_duration']/1000 # this was in ms i thinlk
-        word_fixations = word_fixations[[c for c in cols if c in word_fixations.columns]]
-        # merge w surprisal
-        events = pd.concat([word_fixations, task_events])
-\
-        # %%fill in missing vals
-        events['eeg_sample'] = events['concat_eeg_latency'].astype(float).astype(int)
-        events['identifier'] = events['identifier'].fillna('') # some are NaN
-        events['task'] = events['task'].fillna('none') # some are NaN
-        events['event_type'] = events['event_type'].fillna('other') # some are NaN
-        events = events.drop_duplicates(subset=['eeg_sample','identifier'])
-        # merge lexical properties to events by IA_ID, which needs to be forced to be a string formatted as an integer not a float like 1.0
-        # make annotations from events
-        annot_all = mne.Annotations(onset=events['concat_eeg_latency_sec'], duration=events['duration_sec'], description=events['event_type'])
-        EEG.set_annotations(annot_all)
-
-        #%%
-        ##### apply preprocessing to EEG (interp bads and reref alraedy done)
-        EEG.filter(0.5, 15)
-
-        ##### select events
-        # select only reading 
-        fixations = events[events['event_type'].str.contains('Fixation')].rename(columns={'concat_eeg_latency':'eeg_sample'})
-        task_events = events[events['event_type'].str.contains('ButtonPress')].rename(columns={'concat_eeg_latency':'eeg_sample'})
-        # remove fixations with duration <50 or >1000
-        fixations = fixations[(fixations['duration_sec'] > 0.05) & (fixations['duration_sec'] < 1)]
-
-        # drop fixations on stop_words
-        fixations = fixations[fixations['stop_word']==False]
-        fixations = fixations[~fixations['surprisal'].isna()]
-        fixations = fixations[~fixations['log_word_freq'].isna()]
-        fixations = fixations[~fixations['relative_word_position'].isna()]
-
-        #%%
-        ##### covariates
-        #  use latencies in trl to look up covariates in events
-        fixations['REFIXATION'] = fixations['count_on_word']>0
-        fixations = fixations.set_index('eeg_sample')
-        lexical_covariates = ['surprisal', 'log_word_freq', 'relative_word_position']
-        gaze_covariates = []
-        cognitive_covariates = [
-                    'REFIXATION',
-        ]
-
-        ##### covariates
-        # separate lexical covariates for MW and no MW fixations so we can look at interaction
-        lexical_covariates_2 =[]
-        for l in lexical_covariates:
-            for c in cognitive_covariates:
-                fixations[f'{l}_{c}'] = fixations[l]*fixations[c]
-                lexical_covariates_2.append(f'{l}_{c}')
-        lexical_covariates = lexical_covariates + lexical_covariates_2
-        ##### add blinks 
-        task_events.set_index('eeg_sample', inplace=True)
-        # concatenate covariate columns to fixations + task events
-        events_to_model = pd.concat([fixations, task_events])
-        
-        # take eeg_sample as a normal column again
-        events_to_model.reset_index(inplace=True)
-        # drop  duplicates on eeg sample taking into account decimation - GLM complains otherwise
-        events_to_model['eeg_sample_decim'] = (events_to_model['eeg_sample']/decimation).astype(int)
-        print(f'length before drop duplicates: {len(events_to_model)}')
-        events_to_model = events_to_model.drop_duplicates(subset=['eeg_sample_decim'])
-        print(f'length after drop duplicates: {len(events_to_model)}')
-                # get covariates back oput of events now dupes have been droped
-        covariates = events_to_model.loc[:,['eeg_sample']+lexical_covariates+gaze_covariates+cognitive_covariates]
-        # scale and center copntinuous covariates (lex, gaze) but leave MW/refixations as is
-        covariates.loc[:,lexical_covariates+gaze_covariates] = covariates.loc[:,lexical_covariates+gaze_covariates].apply(lambda x: (x-x.mean())/x.std(), axis=0)
-
-        # fillna with 0
-        covariates = covariates.fillna(0)
-        # trick to get trl and trldict 
-        annot_to_model = mne.Annotations(onset=events_to_model['latency_sec'], duration=events_to_model['duration_sec'], description=events_to_model['identifier'])
-        EEG.set_annotations(annot_to_model)
-        trl_to_model, trldict_to_model = mne.events_from_annotations(EEG, regexp='.*Fixation|.*ButtonPress')
-        # check covariates same length as trl 
-        if len(covariates) != len(trl_to_model):
-            print(f'{pID} covariates and trl are different lengths')
-            # get matching eeg_samples from trl first column and coviarates eeg_sample
-            trl_eeg_samples = trl_to_model[:,0]
-            cov_eeg_samples = covariates['eeg_sample']
-            common = np.intersect1d(trl_eeg_samples, cov_eeg_samples)
-            covariates = covariates[covariates['eeg_sample'].isin(common)]
-            trl_to_model = trl_to_model[np.isin(trl_to_model[:,0], common)]
-        # check if covariates is singular
-        if np.linalg.matrix_rank(covariates) < covariates.shape[1]:
-            print(f'{pID} covariates are singular')
-            skip_reasons[pID] = 'singular covariates'
-            continue
-
-
-        ##### model
-        tmin, tmax = -0.3, 0.8
-        loglevelwas = mne.set_log_level('WARNING', return_old_level=True)
-        try:
-            X, rERP, stats = ridge_regression_raw(
-                EEG, 
-                events=trl_to_model, event_id=trldict_to_model,
-                tmin=tmin, tmax=tmax, 
-                reject={'eeg': 120e-6}, # uV, as in DImigen Ehinger 2019
-                tstep=1,
-                decim=decimation, #TODO: replace w 1 when finalized
-                covariates=covariates.drop(columns=['eeg_sample']), 
-                model = partial(ridge_model, alpha=ridge_alpha),
-                estimate_stats=False
-            )
-        except Exception as e:
-            print(f'Error in fitting model for {pID}: {e}')
-            skip_reasons[pID] = 'model fitting error: ' + str(e)
-            continue
-        ##### save stats
-        save_fn = os.path.join(dir_out, f'{pID}_rERP_stats.npz')
-        np.savez(save_fn, **stats)
-        rERP['FRP_REFIXATION=1'] = mne.combine_evoked([rERP['reading/Fixation'], rERP['REFIXATION=1']], weights=[1, 1])
-        rERP['FRP_MW=0'] = mne.combine_evoked([rERP['MW=0'], rERP['reading/Fixation']], weights=[1, 1])
-        rERP['FRP_MW=1'] = mne.combine_evoked([rERP['MW=1'], rERP['reading/Fixation']], weights=[1, 1])
-        rERP['FRP_MW=0_REFIXATION=1'] = mne.combine_evoked([rERP['reading/Fixation'], rERP['REFIXATION=1'], rERP['MW=0_REFIXATION=1']], weights=[1, 1, 1])
-        rERP['FRP_MW=1_REFIXATION=1'] = mne.combine_evoked([rERP['reading/Fixation'], rERP['REFIXATION=1'], rERP['MW=1_REFIXATION=1']], weights=[1, 1, 1])
+        #
+    task_events = pd.concat([add_scalar_col(b['events'], b['block_no']) for b in all_blocks])
+    fixations = pd.concat([add_scalar_col(b['fixations'], b['block_no']) for b in all_blocks])
+    word_fixations = pd.concat([add_scalar_col(b['word_fixations'], b['block_no']) for b in all_blocks])
+    EEG = mne.concatenate_raws([b['rawEEG'] for b in all_blocks])
+    EEG.set_montage(EGImontage)
+    # get back annotations from EEG now its been merged the timestmaps are different
+    annot_all = EEG.annotations.to_data_frame()
+    # onset is DateTimeArray but it shold just be seconds
+    annot_all['concat_eeg_latency_sec'] = (annot_all['onset'] - annot_all['onset'].iloc[0]).dt.total_seconds()
+    annot_all['concat_eeg_latency'] = annot_all['concat_eeg_latency_sec']*EEG.info['sfreq']
+    # merge with word_fixations on "description" col which is same as "identifier"
+    word_fixations = word_fixations.merge(annot_all, left_on='identifier', right_on='description', suffixes=('','_concatEEG'))
+    task_events = task_events.merge(annot_all, left_on='eeg_latency_sec', right_on='concat_eeg_latency_sec', suffixes=('','_concatEEG'))
+    task_events['event_type'] = 'ButtonPress'
+    task_events['task'] = np.where(task_events['eeg_value'].isin([10,11]), 'reading', 'other')
+    # common columns, any extra will be filled w nan
+    cols = ['event_type','task','sentence_ix','word_ix', 'count_on_word', 'identifier','word', 
+        'fix_duration','duration_sec', 'concat_eeg_latency','concat_eeg_latency_sec','block_no', 
+        'surprisal', 'log_word_freq', 'relative_word_position', 'stop_word']
     
-        # #### visualise significant effects
-        # plot p-values on evokeds
-        # plotconds = ['reading/Fixation','sham/Fixation','MW=0','MW=1','REFIXATION=1','surprisal','log_word_freq','relative_word_position']
-        # fig, ax = plt.subplots(len(plotconds),1, figsize=(12, 12))
-        # for i,cond in enumerate(plotconds):
-        #     evk = rERP[cond]
-        #     condname = evk.comment
-        #     pvals = stats['p-values'][cond]
-        #     plot_with_stats(evk, pvals, channel='CPz', ax=ax[i])
-        #     # set title of axis to cond
-        #     ax[i].set_title(cond)
-        # fig.savefig(os.path.join(dir_out, f'{pID}_pvals.png'))
+    task_events = task_events[[c for c in cols if c in task_events.columns]]
+    word_fixations['event_type'] = 'Fixation'
+    word_fixations['task'] = 'reading'
+    word_fixations['duration_sec'] = word_fixations['fix_duration']/1000 # this was in ms i thinlk
+    word_fixations = word_fixations[[c for c in cols if c in word_fixations.columns]]
+    # merge w surprisal
+    events = pd.concat([word_fixations, task_events])
+    
+    # fill in missing vals
+    events['eeg_sample'] = events['concat_eeg_latency'].astype(float).astype(int)
+    events['identifier'] = events['identifier'].fillna('') # some are NaN
+    events['task'] = events['task'].fillna('none') # some are NaN
+    events['event_type'] = events['event_type'].fillna('other') # some are NaN
+    events = events.drop_duplicates(subset=['eeg_sample','identifier'])
+    # merge lexical properties to events by IA_ID, which needs to be forced to be a string formatted as an integer not a float like 1.0
+    # make annotations from events
+    annot_all = mne.Annotations(onset=events['concat_eeg_latency_sec'], duration=events['duration_sec'], description=events['event_type'])
+    EEG.set_annotations(annot_all)
 
-        ##### plot contrast between MW and no MW for main effect 
-        fig=rERP['reading/Fixation'].plot_joint()
-        fig.savefig(os.path.join(dir_out, f'{pID}_FRP_butterfly.png'))
+    #
+    ##### apply preprocessing to EEG (interp bads and reref alraedy done)
+    EEG.filter(0.5, 15)
 
-        plot_conds = [
-            ['FRP_MW=0','FRP_MW=1'],
-            ['reading/Fixation','FRP_REFIXATION=1'],
-            ['surprisal','log_word_freq','relative_word_position'],
-            ['surprisal_MW=0','surprisal_MW=1'],
-            ['surprisal','surprisal_REFIXATION=1','surprisal_MW=0_REFIXATION=1','surprisal_MW=1_REFIXATION=1'],
-        ]
-        fig, ax = plt.subplots(len(plot_conds), 1,figsize=(12, 9))
-        for i,cc in enumerate(plot_conds):
-            plotdict = {k:rERP[k] for k in cc}
-            mne.viz.plot_compare_evokeds(plotdict, picks='CPz', axes=ax[i] )
-        fig.savefig(os.path.join(dir_out, f'{pID}_FRP_effects.png'))
+    ##### select events
+    # select only reading 
+    fixations = events[events['event_type'].str.contains('Fixation')]
+    task_events = events[events['event_type'].str.contains('ButtonPress')]
+    # remove fixations with duration <50 or >1000
+    fixations = fixations[(fixations['duration_sec'] > 0.05) & (fixations['duration_sec'] < 1)]
 
-        ##### save regression erps
-        mne.write_evokeds(os.path.join(dir_out, f'{pID}_rERP-evk.fif'), [ev for ev in rERP.values()], overwrite=True)
+    # drop fixations on stop_words
+    fixations = fixations[fixations['stop_word']==False]
+    fixations = fixations[~fixations['surprisal'].isna()]
+    fixations = fixations[~fixations['log_word_freq'].isna()]
+    fixations = fixations[~fixations['relative_word_position'].isna()]
+
+    #
+    ##### covariates
+    #  use latencies in trl to look up covariates in events
+    fixations['REFIXATION'] = np.where(fixations['count_on_word']>0, 1, 0)
+    fixations = fixations.set_index('eeg_sample')
+    lexical_covariates = ['surprisal', 'log_word_freq', 'relative_word_position']
+    gaze_covariates = []
+    cognitive_covariates = [
+                'REFIXATION',
+    ]
+
+    ##### covariates
+    # separate lexical covariates for MW and no MW fixations so we can look at interaction
+    lexical_covariates_2 =[]
+    for l in lexical_covariates:
+        for c in cognitive_covariates:
+            fixations[f'{l}_{c}'] = fixations[l]*fixations[c]
+            lexical_covariates_2.append(f'{l}_{c}')
+    lexical_covariates = lexical_covariates + lexical_covariates_2
+    ##### add blinks 
+    task_events.set_index('eeg_sample', inplace=True)
+    # concatenate covariate columns to fixations + task events
+    events_to_model = pd.concat([fixations, task_events])
+    
+    # take eeg_sample as a normal column again
+    events_to_model.reset_index(inplace=True)
+    # drop  duplicates on eeg sample taking into account decimation - GLM complains otherwise
+    events_to_model['eeg_sample_decim'] = (events_to_model['eeg_sample']/decimation).astype(int)
+    print(f'length before drop duplicates: {len(events_to_model)}')
+    events_to_model = events_to_model.drop_duplicates(subset=['eeg_sample_decim'])
+    print(f'length after drop duplicates: {len(events_to_model)}')
+            # get covariates back oput of events now dupes have been droped
+    covariates = events_to_model.loc[:,['eeg_sample']+lexical_covariates+gaze_covariates+cognitive_covariates]
+    # scale and center copntinuous covariates (lex, gaze) but leave MW/refixations as is
+    covariates.loc[:,lexical_covariates+gaze_covariates] = covariates.loc[:,lexical_covariates+gaze_covariates].apply(lambda x: (x-x.mean())/x.std(), axis=0)
+
+    # fillna with 0
+    covariates = covariates.fillna(0)
+    # trick to get trl and trldict 
+    annot_to_model = mne.Annotations(onset=events_to_model['concat_eeg_latency_sec'], duration=events_to_model['duration_sec'], description=events_to_model['event_type'])
+    EEG.set_annotations(annot_to_model)
+    trl_to_model, trldict_to_model = mne.events_from_annotations(EEG, regexp='Fixation|ButtonPress')
+    # check covariates same length as trl 
+    if len(covariates) != len(trl_to_model):
+        print(f'{pID} covariates and trl are different lengths')
+        # get matching eeg_samples from trl first column and coviarates eeg_sample
+        trl_eeg_samples = trl_to_model[:,0]
+        cov_eeg_samples = covariates['eeg_sample']
+        common = np.intersect1d(trl_eeg_samples, cov_eeg_samples)
+        covariates = covariates[covariates['eeg_sample'].isin(common)]
+        trl_to_model = trl_to_model[np.isin(trl_to_model[:,0], common)]
+    # check if covariates is singular
+    # Ensure all columns in covariates are numeric
+    covariates = covariates.apply(pd.to_numeric, errors='coerce').fillna(0)
+    if np.linalg.matrix_rank(covariates.values) < covariates.shape[1]:
+        print(f'{pID} covariates are singular')
+        skip_reasons[pID] = 'singular covariates'
+        continue
+
+
+    ##### model
+    tmin, tmax = -0.3, 0.8
+    loglevelwas = mne.set_log_level('WARNING', return_old_level=True)
+    try:
+        X, rERP, stats = ridge_regression_raw(
+            EEG, 
+            events=trl_to_model, event_id=trldict_to_model,
+            tmin=tmin, tmax=tmax, 
+            # reject={'eeg': 120e-6}, # uV, as in DImigen Ehinger 2019
+            tstep=1,
+            decim=decimation, #TODO: replace w 1 when finalized
+            covariates=covariates.drop(columns=['eeg_sample']), 
+            model = partial(ridge_model, alpha=ridge_alpha),
+            estimate_stats=False
+        )
+    except Exception as e:
+        print(f'Error in fitting model for {pID}: {e}')
+        skip_reasons[pID] = 'model fitting error: ' + str(e)
+        continue
+    ##### save stats
+    save_fn = os.path.join(dir_out, f'{pID}_rERP_stats.npz')
+    np.savez(save_fn, **stats)
+    rERP['FRP_REFIXATION'] = mne.combine_evoked([rERP['Fixation'], rERP['REFIXATION']], weights=[1, 1])
+
+
+    fig=rERP['Fixation'].plot_joint()
+    fig.savefig(os.path.join(dir_out, f'{pID}_FRP_butterfly.png'))
+
+    plot_conds = [
+        ['Fixation','FRP_REFIXATION'],
+        ['surprisal','log_word_freq','relative_word_position'],
+        ['surprisal','surprisal_REFIXATION'],
+    ]
+    fig, ax = plt.subplots(len(plot_conds), 1,figsize=(12, 9))
+    for i,cc in enumerate(plot_conds):
+        plotdict = {k:rERP[k] for k in cc}
+        mne.viz.plot_compare_evokeds(plotdict, picks='E55', axes=ax[i] )
+    fig.savefig(os.path.join(dir_out, f'{pID}_FRP_effects.png'))
+
+    ##### save regression erps
+    mne.write_evokeds(os.path.join(dir_out, f'{pID}_rERP-evk.fif'), [ev for ev in rERP.values()], overwrite=True)
         # append to list of all subjects
-        rERP_ALL.append(rERP)
     # except Exception as e:
     #     print(f'Error in {pID}: {e}')
     #     traceback.print_exc()
@@ -353,15 +342,11 @@ for pID in pIDs:
 
 #%% group averages and stats
 rERP_ALL = {}
-channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
+channels = ['E55']
 
 cond_combinations = {
-    'FRP': ['reading/Fixation'],
-    'FRP_MW=0': ['reading/Fixation','MW=0'],
-    'FRP_MW=1': ['reading/Fixation','MW=1'], 
-    'FRP_REFIXATION=1' : ['reading/Fixation', 'REFIXATION=1'],
-    'FRP_MW=0_REFIXATION=1': ['reading/Fixation','REFIXATION=1','MW=0_REFIXATION=1'],
-    'FRP_MW=1_REFIXATION=1': ['reading/Fixation','REFIXATION=1','MW=1_REFIXATION=1'],
+    'FRP': ['Fixation'],
+    'FRP_REFIXATION' : ['Fixation', 'REFIXATION'],
 }
 condnames = {}
 for s in rERP_list:
@@ -399,7 +384,7 @@ contrast_conds =  [
     'ButtonPress',
     ['FRP','FRP_REFIXATION=1'],
                 ]
-channels = ['FCz','CPz',['AFF5h','AFF6h'],['CCP5h','CCP6h'],['PPO9h','PPO10h']]
+channels = ['FCz','E55',['AFF5h','AFF6h'],['CCP5h','CCP6h'],['PPO9h','PPO10h']]
 
 for cc in contrast_conds:
     for ch in channels:

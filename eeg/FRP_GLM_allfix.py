@@ -39,8 +39,8 @@ pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_fif) if f.endswi
 pIDs = sorted(list(set(pIDs)))
 # #####
 # pIDs = ['EML1_050', 'EML1_084', 'EML1_106', 'EML1_114', 'EML1_118', 'EML1_121', 'EML1_131', 'EML1_141', 'EML1_144', 'EML1_148', 'EML1_169', 'EML1_175']
-# resume_from = 'EML1_170'
-# pIDs = pIDs[pIDs.index(resume_from):]
+resume_from = 'EML1_170'
+pIDs = pIDs[pIDs.index(resume_from):]
 # #####
 exclude = [20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32,39, 40, 73, 77, 78, 87,88,93,99, 
     110,115,123,125, 131,138, 144,160, 164,167,168, 171,172,173, 178,179] # ubj to exclude because no eeg or no trigger etc.
@@ -260,6 +260,7 @@ if REDO:
             X_clean = X.copy()
             # set to 0 any regrerssor corresponding to blink or buttonrpess
             nuisance_vars = ['Blink', 'ButtonPress']
+            nuisance_vars = [k for k in stats['regressor_indices'].keys() if any([nv in k for nv in nuisance_vars])]
             nuisance_ix = [stats['regressor_indices'][rv] for rv in nuisance_vars]
             # these are ranges, make a lsit of indices from ranges
             nuisance_ix = [i for ix in nuisance_ix for i in range(ix[0], ix[1])]
@@ -268,9 +269,14 @@ if REDO:
             beta_array = np.zeros((len(channels),X_clean.shape[1]))
             for evt,evix in stats['regressor_indices'].items():
                 beta_array[:,evix[0]:evix[1]] = stats['betas'][evt]
-
+            beta_array = beta_array.T
             y_pred_clean = X_clean @ beta_array # just blink and buttonpress events
-
+            # add back resid
+            y_pred_clean = y_pred_clean + resid
+            # put into an MNE raw (just use a copy of EEG)
+            y_pred_clean_mne = mne.io.RawArray(y_pred_clean.T, info)
+            # save it
+            y_pred_clean_mne.save(os.path.join(dir_out, f'{pID}_glmcleaned.fif'), overwrite=True)
             # # plot each epoch overlaif
             # fig, ax = plt.subplots(1,1, figsize=(12, 6))
             # for i, ep in enumerate(frp_dc_array):

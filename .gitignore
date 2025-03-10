@@ -8,3 +8,9 @@ info/*.csv
 *.npz
 *.bin
 *.pyc
+*.RData
+*.Rhistory
+*.Rproj
+**__packages
+*.rdb
+*.rdx

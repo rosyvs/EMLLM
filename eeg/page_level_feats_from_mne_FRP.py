@@ -24,17 +24,24 @@ def get_stats_for_win(win, data, times, rms=False):
         win_stats['min_lat'] = [times[sel[i]] for i in np.argmin(y, axis=1)]
         win_stats['zero_crossings'] = np.sum(np.diff(np.sign(y), axis=1) != 0, axis=1)
     return win_stats
+def top_3_cols_with_nans(df):
+    # find top 3 columns with most NaNs and print both the name of the col and the nan count
+    nans = df.isna().sum()
+    nans = nans.sort_values(ascending=False)
+    for i in range(3):
+        print(f'{nans.index[i]}: {nans[i]} NaNs')
+    return nans
 
 # %% Get FRP data
-dir_in = '/Volumes/Blue1TB/EEG_processed/FRP_GLM_simple_decim10'
+dir_in = '/Volumes/Blue1TB/EEG_processed/FRP_GLM_allfix_decim10'
 pIDs =  [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_in) if 'dcFRP_epochs_allchannels' in f]
 pIDs = sorted(list(set(pIDs)))
 featdir = 'FRP_stats'
 os.makedirs(os.path.join(dir_in,featdir), exist_ok=True)
 ia_label_mapping = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
 min_word_freq = np.min(ia_label_mapping.loc[ia_label_mapping['word_freq'] > 0, 'word_freq'])
-log_word_freq_fill_value = np.log(min_word_freq)-1
-
+# log_word_freq_fill_value = np.log(min_word_freq)-1
+log_word_freq_fill_value = None # actually I htink it makes more sense to fill non words with mean later - nonword IAs aren't like super rare words.
 FRPall = []
 FRPavg = []
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
@@ -43,7 +50,7 @@ channel_combos = {'AFFave':['AFF5h','AFF6h'],'CCPave':['CCP5h','CCP6h'],'PPOave'
 
 windows = {'P1': [70, 120], 'N1': [140, 280], 'N400': [300, 500]}
 
-
+#%%
 stats_all = []
 for pID in pIDs:
     df = pd.read_csv(os.path.join(dir_in, f'{pID}_dcFRP_epochs_allchannels.csv')).dropna(subset=['identifier']).drop(columns=['Unnamed: 0'])
@@ -60,8 +67,7 @@ for pID in pIDs:
         data_dict[channel] = data # for later use w combos
         # check for NaNs
         if np.any(np.isnan(data)):
-            print(f'{pID} {channel} has {np.sum(np.isnan(data))} NaNs')
-            #where are the nans
+            nans=top_3_cols_with_nans(data)
         times = [int(re.findall(r'(-?\d{1,3})ms', col)[0]) for col in data_cols]
         for win_label, win in windows.items():
             res = get_stats_for_win(win, data.values, times)
@@ -98,17 +104,18 @@ for pID in pIDs:
     # log transform surprisal and freq
     stats['log_word_freq'] = np.where(stats['word_freq'] > 0, np.log(stats['word_freq']), log_word_freq_fill_value)
     
-    # count na rows and drop them
-    n_na = np.sum(stats.isna().any(axis=1))
-    if n_na > 0:    
-        print(f'{pID} has {n_na} rows with NaNs')
-        stats = stats.dropna()
+    # # count na rows and drop them
+    # n_na = np.sum(stats.isna().any(axis=1))
+    # if n_na > 0:    
+    #     print(f'{pID} has {n_na} rows with NaNs')
+    #     stats = stats.dropna()
 
     stats.to_csv(os.path.join(dir_in,featdir, f'{pID}_dcFRP_stats.csv'), index=False)
     stats_all.append(stats)
 
 stats_all = pd.concat(stats_all)
 stats_all.to_csv(os.path.join(dir_in,featdir, f'ALL_dcFRP_stats.csv'), index=False)
+
 # %% make df with layout for Megan
 # read in stats per subj
 stats_all = []
@@ -118,23 +125,25 @@ for pID in pIDs:
 stats_all = pd.concat(stats_all)
 
 stats_fmt = stats_all.rename(columns={'identifier': 'EVENT','task': 'TrialType'})
-stats_fmt = stats_fmt[stats_fmt['TrialType'] == 'reading']
-stats_fmt = stats_fmt[stats_fmt['stop_word'] == 0]
+
 # split event on letter/digit boundary to get text and pagenum cols
 stats_fmt['Text'] = [re.findall(r'[a-zA-Z]+', e)[0] for e in stats_fmt['EVENT']]
 stats_fmt['PageNum'] = [re.findall(r'\d+', e)[0] for e in stats_fmt['EVENT']]
 identifiers = ['ParticipantID','Text','PageNum','TrialType','EVENT']
-
+stats_fmt['logFixDur'] = np.log(stats_fmt['duration_sec'])
 # select key features
 feats = ['N400_CPz_mean', 'N400_CPz_min', 'N400_CPz_min_lat', 'N400_CPz_max_abs','N400_CPz_max_abs_lat',
         'N400_FCz_mean', 'N400_FCz_min', 'N400_FCz_min_lat', 'N400_FCz_max_abs','N400_FCz_max_abs_lat',
         'P1_PPOave_mean', 'P1_PPOave_max', 'P1_PPOave_max_lat', 'P1_PPOave_max_abs', 'P1_PPOave_max_abs_lat',
         'N1_PPOave_mean', 'N1_PPOave_min', 'N1_PPOave_min_lat', 'N1_PPOave_max_abs', 'N1_PPOave_max_abs_lat',
-        'duration_sec','fix_pupilAvg',
-        'surprisal', 'log_word_freq', 
+        'N400_RMS_all_mean', 'N400_RMS_all_max', 'N400_RMS_all_max_lat',
+        'N1_RMS_all_mean',  'N1_RMS_all_max', 'N1_RMS_all_max_lat',
+        'P1_RMS_all_mean', 'P1_RMS_all_max' , 'P1_RMS_all_max_lat',
+        'duration_sec','fix_pupilAvg', 'logFixDur',
+        'surprisal', 'log_word_freq', 'punctuation','stop_word','fix_pageIndex'
 ]
 stats_fmt = stats_fmt[identifiers + feats]
-
+stats_fmt.to_csv(os.path.join(dir_in,featdir, f'ALL_dcFRP_stats_formatted.csv'), index=False)
 # compute page-level averages of these feats
 stats_pglevel = stats_fmt.groupby(identifiers).mean().reset_index()
 
@@ -176,6 +185,16 @@ correlation_feats = {
     'log_word_freq~duration_sec': ['duration_sec', 'log_word_freq'],
     'surprisal~fix_pupilAvg': ['fix_pupilAvg', 'surprisal'],
     'log_word_freq~fix_pupilAvg': ['fix_pupilAvg', 'log_word_freq'],
+    'P1_PPOave_mean~logFixDur': ['P1_PPOave_mean', 'logFixDur'],
+    'N1_PPOave_mean~logFixDur': ['N1_PPOave_mean', 'logFixDur'],
+    'N400_CPz_mean~logFixDur': ['N400_CPz_mean', 'logFixDur'],
+    'P1_PPOave_max~logFixDur': ['P1_PPOave_max', 'logFixDur'],
+    'N1_PPOave_min~logFixDur': ['N1_PPOave_min', 'logFixDur'],
+    'N400_CPz_min~logFixDur': ['N400_CPz_min', 'logFixDur'],
+    'P1_PPOave_max_lat~logFixDur': ['P1_PPOave_max_lat', 'logFixDur'],
+    'N1_PPOave_min_lat~logFixDur': ['N1_PPOave_min_lat', 'logFixDur'],
+    'N400_CPz_min_lat~logFixDur': ['N400_CPz_min_lat', 'logFixDur'],
+
 }
 for k, v in correlation_feats.items():
     # group by identifiers and compute correlation
@@ -211,8 +230,8 @@ to_plot=[['N400_CPz_max_abs_Z', 'surprisal'],
 for i, (y,x) in enumerate(to_plot):
     ax = axs.flatten()[i]
     for pID in pIDs[0:10]:
-        stats = stats_all[stats_all['ParticipantID'] == pID]
-        ax.scatter(stats[x], stats[y], alpha=0.1, label=pID)
+        statsp = stats_all[stats_all['ParticipantID'] == pID]
+        ax.scatter(statsp[x], statsp[y], alpha=0.1, label=pID)
     ax.set_xlabel(x)
     ax.set_ylabel(y)
 
@@ -228,8 +247,8 @@ to_plot=[['N400_CPz_max_abs', 'surprisal'],
 for i, (y,x) in enumerate(to_plot):
     ax = axs.flatten()[i]
     for pID in pIDs[0:10]:
-        stats = stats_all[stats_all['ParticipantID'] == pID]
-        ax.scatter(stats[x], stats[y], alpha=0.1, label=pID)
+        statsp = stats_all[stats_all['ParticipantID'] == pID]
+        ax.scatter(statsp[x], statsp[y], alpha=0.1, label=pID)
     ax.set_xlabel(x)
     ax.set_ylabel(y)
     ax.legend()

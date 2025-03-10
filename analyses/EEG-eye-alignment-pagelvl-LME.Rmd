@@ -1,0 +1,359 @@
+---
+title: "FRP surpisal"
+author: "Rosy Southwell"
+subtitle: "FRP estimated using deconvolution in MNE"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 4
+knit: (function(inputFile, encoding) {
+      rmarkdown::render(inputFile,
+                        encoding = encoding, 
+                        output_file = "FRP_LMM_mne_allfix.html"
+                        )})
+---
+
+```{r}
+knitr::opts_chunk$set(cache=F)
+USE_DC <- T
+version <- "FRP_GLM_allfix_decim10"
+description <- "using MNE, all fixations, removing outlier fixations"
+knitname<- paste0("FRP_LMM_mne_",version,"_", (if(USE_DC){"dc"} else {"nodc"}), ".html")
+```
+# Info
+### USE_DC: `r USE_DC`
+### version: `r version`
+### description: `r description`
+
+# Data
+```{r, message=FALSE, warning=FALSE, cache=T}
+# List of libraries to be installed and loaded
+libraries <- c(
+  "lme4", "lmerTest", "reshape2", "plyr", "beepr", "car", "sjPlot", "emmeans",
+  "ggplot2", "tidyr", "readxl", "optimx", "dfoptim", "robustlmm", "mediation",
+  "stringr", "ggpubr", "gridExtra", "lattice", "blme", "DescTools", "dplyr", "tidyverse","magrittr"
+)
+
+# Function to install and load libraries
+install_and_load <- function(libraries) {
+  for (lib in libraries) {
+    if (!require(lib, character.only = TRUE)) {
+      install.packages(lib, dependencies = TRUE)
+      library(lib, character.only = TRUE)
+    }
+  }
+}
+
+# Install and load the libraries
+install_and_load(libraries)
+options(scipen = 50)
+source("rutils.R") # colScale
+```
+
+load data
+
+```{r, message=F, warning=F}
+text_file = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/EMLLM/info/ia_label_mapping_opt_surprisal.csv'
+
+# eeg_file = '/Volumes/Blue1TB/EEG_processed/FRP_GLM_allfix_decim10/FRP_stats/ALL_dcFRP_stats_formatted.csv' 
+eeg_file = '/Volumes/Blue1TB/EEG_processed/FRP_GLM_allfix_decim10/FRP_stats/ALL_dcFRP_stats.csv'
+
+# df_orig <- read.csv(eeg_file) 
+```
+
+subjects excluded 
+```{r, message=F, warning=F}
+# # using QC based on reading v sham classifier <.55 AUROC
+# exclude <-c()
+# # exclude <- c("EML1_034", "EML1_055", "EML1_093", "EML1_099" ,"EML1_115", "EML1_132", "EML1_154")
+# # using MW rates - between 20 and 80% 
+# # using comprehension not significantly different from chance
+# df <- df %>% filter(!ParticipantID %in% exclude)
+```
+
+## Merge with text info and filter fixations
+```{r}
+df<-df_orig
+if( 'EVENT' %in% colnames(df)){df <-df%>% rename(identifier=EVENT)}
+# DATA TYPES
+LOGICAL_VARS <- c('punctuation','stop_word')
+df[LOGICAL_VARS] <- sapply(df[LOGICAL_VARS],as.logical)
+# delta_wf = log(min(df$word_freq[df$word_freq>0]))-1 # use the minimum word frequency for any missing word frerquencies so we can take log
+fixfillval = mean(df$fixDur, na.rm=T)
+df <- df %>% rename(fixDur=duration_sec)
+df <- df %>% mutate(
+                  logWordFreq = ifelse(is.na(log_word_freq),0,log_word_freq),
+                  logFixDur = ifelse(is.na(fixDur), 0, log(fixDur))
+)
+# replace RMS_all with RMSall to make later string munging easier
+colnames(df) <- gsub("RMS_all", "RMSall", colnames(df))
+colnames(df) <- gsub("_lat","lat", colnames(df))
+colnames(df) <- gsub("max_abs","maxabs", colnames(df))
+
+
+```
+
+
+
+# transforms 
+```{r}
+
+# refixation
+df <- df %>% group_by(ParticipantID, identifier, IA_ID) %>% mutate(
+  IA_fix_count = n(),
+  refixation_ = ifelse(n()>1,1,0))
+# remove some unused cols as this is getting ungainly
+df <- df %>% select(c(-contains(c("AFF","CCP","PPO9","PPO10","FCz","N400_PPO","1_CPz","N400_CPz_max","N1_*_max","P1_*_min","max_abs","zero_crossings")) , contains("RMS")))
+
+feats_eye <- grep("fix|pupil|duration",colnames(df), value=T, ignore.case=T)
+feats_eeg <- grep("N400|P1|N1",colnames(df), value=T, ignore.case=T)
+feats_lex = c("punctuation","sentence_ix", "word_in_sentence", "sentence_word_count", "relative_word_position", "stop_word","surprisal")
+feats <- c(feats_eye, feats_eeg)
+
+# # mutate so all predictor cols are scaled 
+# # scale_this <- function(x){
+# #   (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
+# # }
+# ftarray = array(df %>% ungroup() %>% select(feats) %>% unlist(), dim=c(nrow(df), length(feats)), dimnames =list(NULL, feats))
+# ftarray <- colScale(ftarray)
+# df[,feats] <- ftarray
+# df <- df %>% mutate(across(feats,colScale(.)))
+
+refixations <- df %>% group_by(ParticipantID) %>% summarise(refix_rate = mean(refixation_, na.rm=T))
+# df <- df %>% filter(refixation_==0)
+
+df_sub <- df %>% group_by(ParticipantID) %>% summarise_if(is.numeric,mean, na.rm=T)
+# drop rows with no IA
+df.words <- drop_na(df, "IA_LABEL") %>% filter(punctuation==F) %>% filter(stop_word==F)
+df_sub_words <- df.words %>% group_by(ParticipantID) %>% summarise_if(is.numeric,mean, na.rm=T)
+
+```
+
+## predict fixation fixDur from EEG features
+### for all fixations and for content word fixaitons
+```{r, message=F, warning=F}
+m.eye <- lmer(fixDur ~ (1|identifier) + (1|ParticipantID) + 
+                P1_PPOave_mean + P1_PPOave_max + P1_PPOave_maxlat + 
+                N1_PPOave_mean + N1_PPOave_min + N1_PPOave_minlat + 
+                N400_CPz_mean+ N400_CPz_min + N400_CPz_minlat,
+              data=df)
+m.eye.words <- lmer(fixDur ~ (1|identifier) + (1|ParticipantID) + 
+                P1_PPOave_mean + P1_PPOave_max + P1_PPOave_maxlat + 
+                N1_PPOave_mean + N1_PPOave_min + N1_PPOave_minlat + 
+                N400_CPz_mean+ N400_CPz_min + N400_CPz_minlat,
+              data=df.words)
+tab_model(m.eye, m.eye.words)
+```
+
+
+# Modeling with comprehension/MW
+## Load Behavioural data
+
+```{r, message=F, warning=F}
+
+df_comp <- read.csv('/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/Behaviour/EML1_page_level.csv')
+df_comp <- df_comp %>% rename(ParticipantID=ParticipantID) %>% 
+  mutate(Page=PageNum-1,
+         identifier=paste0(Text, Page),
+         meanX = rowMeans(select(., Rote_X, SVT, Inference_X, Deep_X), na.rm = TRUE),
+         meanY = rowMeans(select(., Rote_Y, Inference_Y), na.rm = TRUE), 
+         meanZ = rowMeans(select(., Rote_Z, Inference_Z, Deep_Z), na.rm = TRUE)
+  )
+df <- merge(df, df_comp, on=c("ParticipantID","identifier"))
+df.words <- merge(df.words, df_comp, on=c("ParticipantID","identifier"))
+```
+
+# Eye-mind-linkage metric at page level
+note atanh transform for correlation when it is to be used in model
+```{r, message=F, warning=F}
+eml.page.words <- df.words %>% group_by(ParticipantID, identifier) %>% summarise(
+    n_wordfix=n(),
+    cor_N400meanCPz_surprisal = cor(surprisal, N400_CPz_mean),
+    cor_N400meanCPz_logWordFreq = cor(logWordFreq, N400_CPz_mean),
+    cor_N400minCPz_surprisal = cor(surprisal, N400_CPz_min),
+    cor_N400minCPz_logWordFreq = cor(logWordFreq, N400_CPz_min),
+    cor_N400minlatCPz_surprisal = cor(surprisal, N400_CPz_minlat),
+    cor_N400minlatCPz_logWordFreq = cor(logWordFreq, N400_CPz_minlat),
+    cor_P1_surprisal = cor(surprisal, P1_PPOave_mean),
+    cor_N1_surprisal = cor(surprisal, N1_PPOave_mean),
+    cor_P1_logWordFreq = cor(logWordFreq, P1_PPOave_mean),
+    cor_N1_logWordFreq = cor(logWordFreq, N1_PPOave_mean),
+    cor_logFixDur_surprisal = cor(surprisal, logFixDur),
+    # fixdur
+    logWordFixDur = mean(logFixDur, na.rm=TRUE),
+    cor_word_P1mean_logFixDur = cor(P1_PPOave_mean,logFixDur),
+    cor_word_P1max_logFixDur = cor(P1_PPOave_max,logFixDur),
+    cor_word_P1lat_logFixDur = cor(P1_PPOave_maxlat,logFixDur),
+    cor_word_N1mean_logFixDur = cor(N1_PPOave_mean,logFixDur),
+    cor_word_N1min_logFixDur = cor(N1_PPOave_min,logFixDur),
+    cor_word_N1lat_logFixDur = cor(N1_PPOave_minlat,logFixDur),
+    cor_word_N400mean_logFixDur = cor(N400_CPz_mean,logFixDur),
+    cor_word_N400min_logFixDur = cor(N400_CPz_min,logFixDur),
+    cor_word_N400lat_logFixDur = cor(N400_CPz_minlat,logFixDur),
+    # 
+    meansurprisal=mean(surprisal, na.rm=TRUE),
+    meanP1word=mean(P1_PPOave_mean, na.rm=TRUE),
+    meanN1word=mean(N1_PPOave_mean, na.rm=TRUE),
+    maxP1word = mean(P1_PPOave_max, na.rm=TRUE),
+    latP1word = mean(P1_PPOave_maxlat, na.rm=TRUE),
+    minN1word = mean(N1_PPOave_min, na.rm=TRUE),
+    latN1word= mean(N1_PPOave_minlat, na.rm=TRUE),
+    meanN400word=mean(N400_CPz_mean, na.rm=TRUE),
+    minN400word=mean(N400_CPz_min, na.rm=TRUE),
+    latN400word=mean(N400_CPz_minlat, na.rm=TRUE)
+) %>%  ungroup() %>% 
+  filter(n_wordfix>2) # remove instances with single or two fixation on page as correlation coeff will be 1 or -1
+# eml.page.words[Reduce(`&`, lapply(eml.page.words, is.finite),]
+
+eml.page.all <- df %>% dplyr::group_by(ParticipantID, identifier) %>% dplyr::summarise(
+    n_fix=n(),
+    meanP1=mean(P1_PPOave_mean, na.rm=TRUE),
+    meanN1=mean(N1_PPOave_mean, na.rm=TRUE),
+    maxP1 = mean(P1_PPOave_max, na.rm=TRUE),
+    latP1 = mean(P1_PPOave_maxlat, na.rm=TRUE),
+    minN1 = mean(N1_PPOave_min, na.rm=TRUE),
+    latN1= mean(N1_PPOave_minlat, na.rm=TRUE),
+    meanN400=mean(N400_CPz_mean, na.rm=TRUE),
+    minN400=mean(N400_CPz_min, na.rm=TRUE),
+    latN400=mean(N400_CPz_minlat, na.rm=TRUE),
+    cor_P1mean_logFixDur = cor(P1_PPOave_mean,logFixDur,use="pairwise.complete.obs" ),
+    cor_P1max_logFixDur = cor(P1_PPOave_max,logFixDur,use="pairwise.complete.obs"),
+    cor_P1lat_logFixDur = cor(P1_PPOave_maxlat,logFixDur,use='pairwise.complete.obs'),
+    cor_N1mean_logFixDur = cor(N1_PPOave_mean,logFixDur,use='pairwise.complete.obs'),
+    cor_N1min_logFixDur = cor(N1_PPOave_min,logFixDur,use='pairwise.complete.obs'),
+    cor_N1lat_logFixDur = cor(N1_PPOave_minlat,logFixDur,use='pairwise.complete.obs'),
+    cor_N400mean_logFixDur = cor(N400_CPz_mean,logFixDur,use='pairwise.complete.obs'),
+    cor_N400min_logFixDur = cor(N400_CPz_min,logFixDur,use='pairwise.complete.obs'),
+    cor_N400lat_logFixDur = cor(N400_CPz_minlat,logFixDur,use='pairwise.complete.obs'),
+    logFixDur = mean(logFixDur, na.rm=TRUE)
+
+) %>%  ungroup() %>% 
+  filter(n_fix>2) # remove instances with single or two fixation on page as correlation coeff will be 1 or -1
+# eml.page.all[Reduce(`&`, lapply(eml.page.all, is.finite)),]
+
+df_page <- left_join(eml.page.words, df_comp, by=c('ParticipantID', 'identifier')) 
+df_page <- left_join(df_page, eml.page.all, by=c('ParticipantID', 'identifier')) 
+df_page$MW = as.factor(df_page$MW)
+df_page$identifier =as.factor(df_page$identifier)
+df_page$ParticipantID = as.factor(as.character(df_page$ParticipantID ))
+write_csv(df_page, 'page_lvl_linkage_feats.csv')
+
+# z score the new metrics
+feats_page <- grep("cor_|mean|lat|min|max|fix",colnames(df_page), value=T)
+ftarray = array(df_page %>% ungroup() %>% select(feats_page) %>% unlist(), dim=c(nrow(df_page), length(feats_page)), dimnames =list(NULL, feats_page))
+ftarray <- colScale(ftarray)
+df_pageZ <- df_page
+df_pageZ[,feats_page] <- ftarray
+write_csv(df_pageZ, 'page_lvl_linkage_feats_Z.csv')
+# truncate the z scores to 3 sd
+df_pageZtrunc <- df_pageZ
+df_pageZtrunc[,feats_page] <- pmin(pmax(ftarray, -3), 3)
+write_csv(df_pageZtrunc, 'page_lvl_linkage_feats_Z_trunc.csv')
+
+```
+
+## plot the new metrics
+```{r, message=F, warning=F}
+
+```
+
+## binomial regression: predict page level MW from page level EEG
+```{r, message=F, warning=F}
+
+m.mw.main.word <- glmer(MW ~ meanP1word + meanN1word + meanN400word + minN400word+latN400word+minN1word +maxP1word +latN1word+latP1word+ logFixDur +
+                      n_wordfix + logFixDur + (1|identifier) + (1|ParticipantID), data=df_page %>% drop_na(MW), family = "binomial")
+tab_model(m.mw.main.word )
+
+```
+## binomial regression: predict page level outcome from page level correlations with logFixDur, all words
+### MW
+```{r, message=F, warning=F}
+m.mw.fixdur <- glmer(MW ~ 
+                    cor_word_P1mean_logFixDur + cor_word_P1max_logFixDur + cor_word_P1lat_logFixDur + 
+                    cor_word_N1mean_logFixDur + cor_word_N1min_logFixDur + cor_word_N1lat_logFixDur + 
+                    cor_word_N400mean_logFixDur + cor_word_N400min_logFixDur + cor_word_N400lat_logFixDur + 
+                     n_wordfix + (1|identifier) + (1|ParticipantID), data=df_pageZ %>% drop_na(MW), family = "binomial")
+tab_model(m.mw.fixdur)
+```
+### Comp, word fix
+```{r, message=F, warning=F}
+comp_label <-'Rote_X'
+form <- as.formula(paste0(comp_label, "~", 
+                    "cor_word_P1mean_logFixDur + cor_word_P1max_logFixDur + cor_word_P1lat_logFixDur + 
+                    cor_word_N1mean_logFixDur + cor_word_N1min_logFixDur + cor_word_N1lat_logFixDur + 
+                    cor_word_N400mean_logFixDur + cor_word_N400min_logFixDur + cor_word_N400lat_logFixDur + n_wordfix + (1|identifier) + (1|ParticipantID)"))
+m.comp.wfixdur <- glmer(form, data=df_pageZ %>% drop_na(comp_label), family = "binomial")
+tab_model(m.comp.wfixdur)
+```
+### Comp, all fix
+```{r, message=F, warning=F}
+comp_label <-'Rote_X'
+form <- as.formula(paste0(comp_label, "~", 
+                    "cor_P1mean_logFixDur + cor_P1max_logFixDur + cor_P1lat_logFixDur + 
+                    cor_N1mean_logFixDur + cor_N1min_logFixDur + cor_N1lat_logFixDur + 
+                    cor_N400mean_logFixDur + cor_N400min_logFixDur + cor_N400lat_logFixDur + n_fix + (1|identifier) + (1|ParticipantID)"))
+m.comp.fixdur <- glmer(form, data=df_page %>% drop_na(comp_label), family = "binomial")
+tab_model(m.comp.fixdur)
+```
+### Mean_X
+```{r, message=F, warning=F}
+m.meanx.fixdur <- lmer(meanX ~ 
+                    cor_word_P1mean_logFixDur + cor_word_P1max_logFixDur + cor_word_P1lat_logFixDur + 
+                    cor_word_N1mean_logFixDur + cor_word_N1min_logFixDur + cor_word_N1lat_logFixDur + 
+                    cor_word_N400mean_logFixDur + cor_word_N400min_logFixDur + cor_word_N400lat_logFixDur + 
+                    n_wordfix +  (1|identifier) + (1|ParticipantID), data=df_pageZ %>% drop_na(meanX))
+tab_model(m.meanx.fixdur)
+```
+## binomial regression: predict page level MW from page level EEG feats, all fixations
+```{r, message=F, warning=F}
+
+m.mw.main <- glmer(MW ~ meanP1 + meanN1 + meanN400 + minN400+latN400+minN1 +maxP1 +latN1+latP1+
+                    (1|identifier) + (1|ParticipantID), data=df_page %>% drop_na(MW), family = "binomial")
+# tab_model(m.mw.mean, m.mw.min, m.mw.max)
+# tab_model(m.mw.mean)
+tab_model(m.mw.main,m.mw.main.word)
+
+```
+## binomial regression: predict page level comprehensionfrom page level correlations with surprisal
+```{r, message=F, warning=F}
+comp_label <-'Rote_X'
+m.comp.all <- glmer(Rote_X ~ 
+                    cor_P1_logWordFreq + cor_P1_surprisal +  cor_N1_logWordFreq  + cor_N1_surprisal +
+                    cor_N400meanCPz_logWordFreq + cor_N400meanCPz_surprisal   +
+                    meanP1 + meanN1 + meanN400 +
+                    (1|identifier) + (1|ParticipantID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+m.comp.N400 <- glmer(Rote_X ~ 
+                    cor_N400meanCPz_logWordFreq + cor_N400meanCPz_surprisal   + 
+                    (1|identifier) + (1|ParticipantID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+
+# tab_model(m.comp.mean, m.comp.min, m.comp.max)
+# tab_model(m.comp.mean)
+tab_model(m.comp.all)
+tab_model(m.comp.N400)
+
+```
+
+# COMPREHENSION
+## binomial regression: predict page level comp from page level correlations with surprisal, all fix
+```{r, message=F, warning=F}
+
+m.comp.main <- glmer(Rote_X ~ meanP1 + meanN1 + meanN400 + minN400+latN400+minN1 +maxP1 +latN1+latP1+
+                    (1|identifier) + (1|ParticipantID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+# tab_model(m.mw.mean, m.mw.min, m.mw.max)
+# tab_model(m.mw.mean)
+tab_model(m.comp.main)
+
+```
+## Does page-average surprisal predict MW or comprehension
+```{r}
+m.mw.sp <- glmer(MW ~ meansurprisal  +  (1+meansurprisal|ParticipantID), data=df_page %>% drop_na(MW), family = "binomial")
+tab_model(m.mw.sp)
+
+m.comp.sp <- glmer(Rote_X ~ meansurprisal  +  (1+meansurprisal|ParticipantID), data=df_page %>% drop_na(Rote_X), family = "binomial")
+tab_model(m.comp.sp)
+```
+

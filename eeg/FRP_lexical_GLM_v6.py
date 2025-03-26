@@ -239,7 +239,6 @@ if REDO:
             covariates = events_to_model.loc[:,['eeg_sample']+lexical_covariates+gaze_covariates+cognitive_covariates]
             # scale and center copntinuous covariates (lex, gaze) but leave MW/refixations as is
             covariates.loc[:,lexical_covariates+gaze_covariates] = covariates.loc[:,lexical_covariates+gaze_covariates].apply(lambda x: (x-x.mean())/x.std(), axis=0)
-
             # fillna with 0
             covariates = covariates.fillna(0)
             # trick to get trl and trldict 

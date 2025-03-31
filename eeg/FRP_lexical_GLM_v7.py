@@ -35,7 +35,8 @@ ridge_alpha=1
 verstr = f'FRP_TRF_lexical_v7_alpha{ridge_alpha}_decim{decimation}'
 dir_out = os.path.join(dir_out_par, verstr)
 
-# this version: as for V2 but separate event for word vs nonword fixations rather than filling in covariates for nonwords with 0
+# this version: as for V2 but 
+# separate event for word vs nonword fixations rather than filling in covariates for nonwords with 0
 # also include buttonpress
 # also dont model sham fixations with lexical covariates as this is meaningless
 
@@ -364,9 +365,9 @@ skip_reasons = pd.Series(skip_reasons)
 skip_reasons.to_csv(os.path.join(dir_out, 'skip_reasons.csv'))
 
 #%% exclusions
-SKIP_N = True
-SKIP_COMP = True
-SKIP_MW = True
+SKIP_N = False
+SKIP_COMP = False
+SKIP_MW = False
 
 # load skip_reasons
 if SKIP_N:

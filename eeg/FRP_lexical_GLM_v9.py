@@ -22,9 +22,12 @@ dir_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(dir_path)
 pd.options.mode.chained_assignment = None  # default='warn'
 
-########
-# this version: as for V8 but separate MW effect estimated for word and nonword fixations
-vnum = 9 # version number for this script, used in naming output files
+#################
+# this version: as for V8 but 
+# - categorical dummy coded regressor for type of fixation (word, stop, punc)
+# - separate MW effect estimated for each of the above
+# - no relative word pos covariate
+vnum = 9 
 #################
 
 #%% paths
@@ -45,7 +48,6 @@ dir_out = os.path.join(dir_out_par, verstr)
 os.makedirs(dir_out, exist_ok=True)
 dir_events = os.path.expanduser('~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/events/') # task events
 ia_df = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv').rename(columns={'gpt2_surprisal_page':'surprisal'})
-# remove punctuation from IA_ID
 ia_df['IA_ID'] = ia_df['IA_ID'].fillna('-1').astype(float).astype(int)
 ia_df['log_word_freq'] = ia_df['word_freq'].astype(float).apply(np.log).replace(-np.inf, np.nan)
 
@@ -378,9 +380,9 @@ skip_reasons = pd.Series(skip_reasons)
 skip_reasons.to_csv(os.path.join(dir_out, 'skip_reasons.csv'))
 
 #%% exclusions
-SKIP_N = False
+SKIP_N = True
 SKIP_COMP = False
-SKIP_MW = False
+SKIP_MW = True
 
 # load skip_reasons
 if SKIP_N:

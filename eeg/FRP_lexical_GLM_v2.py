@@ -21,7 +21,10 @@ import traceback
 dir_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(dir_path)
 pd.options.mode.chained_assignment = None  # default='warn'
-
+#################
+# 
+vnum = '2c' 
+#################
 #%% paths
 dir_raw = '/Volumes/Blue1TB/EyeMindLink/Data'
 dir_fif = '/Volumes/Blue1TB/EEG_processed/preprocessed_fif/'
@@ -32,7 +35,7 @@ FORCE_REDO = True
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
 decimation = 10 #TODO: set to 1 for final pass analysis
 ridge_alpha=1
-verstr = f'FRP_TRF_lexical_v2c_alpha{ridge_alpha}_decim{decimation}'
+verstr = f'FRP_TRF_lexical_v{vnum}_alpha{ridge_alpha}_decim{decimation}'
 dir_out = os.path.join(dir_out_par, verstr)
 
 # this version uses dummy coding for MW: intercept is FRP, MW=-1 and MW=0 are additional predictors
@@ -61,6 +64,7 @@ pIDs = sorted(list(set(pIDs)))
 exclude = [20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 39, 40, 73, 77, 78, 87,88,93,99, 
     110,115,123,125, 138, 160, 164,167,168, 171,172,173, 178,179] # ubj to exclude because no eeg or no trigger etc.
 skip_reasons = {} if REDO else pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
+
 skip_reasons = {f'EML1_{pID:03d}' : 'no eeg or no IAs' for pID in exclude}
 pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
 
@@ -73,6 +77,7 @@ pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
 
 
 #%% Loop over subjects
+cond_counts_all = []
 if REDO:
     rERP_ALL = []
     for pID in pIDs: 
@@ -89,6 +94,8 @@ if REDO:
             # check all channels are present
             if set(channels).isdisjoint(EEG.ch_names):
                 print(f'{pID} does not contain all channels, skipping')
+                skip_reasons[pID] = 'missing channels'
+
                 raise Exception(f'{pID} does not contain all channels, skipping')
             # check for bad channels and interpolate them
             if EEG.info['bads']:
@@ -173,26 +180,50 @@ if REDO:
             blinks.set_index('eeg_sample', inplace=True)
             # concatenate covariate coplumns to fixations
             events_to_model = pd.concat([fixations, blinks])
-            # fillna in all covatiates as 0,
-            covariates = events_to_model.loc[:,lexical_covariates+gaze_covariates+cognitive_covariates]
-
             # take eeg_sample as a normal column again
-            events_to_model.reset_index(inplace=True)
+            events_to_model = events_to_model.sort_values('eeg_sample').reset_index()
             # drop  duplicates on eeg sample taking into account decimation - GLM complains otherwise
-            events_to_model['eeg_sample_decim'] = round(events_to_model['eeg_sample']/decimation).astype(int)
+            events_to_model['eeg_sample_decim'] = (events_to_model['eeg_sample']/decimation).astype(int)
             print(f'length before drop duplicates: {len(events_to_model)}')
-            events_to_model = events_to_model.drop_duplicates(subset=['eeg_sample_decim'])
+            events_to_model = events_to_model.drop_duplicates(subset=['eeg_sample_decim'], keep='first')
             print(f'length after drop duplicates: {len(events_to_model)}')
-            # get covariates back oput of events now dupes have been droped
-            covariates = events_to_model.loc[:,covariates.columns]
-            # scale and center copntinuous covariates (lex, gaze) but leave MW as is
+            # get covariates out of events now dupes have been droped
+            covariates = events_to_model.loc[:,['eeg_sample']+lexical_covariates+gaze_covariates+cognitive_covariates]
+            # scale and center copntinuous covariates (lex, gaze) but leave MW/refixations as is
             covariates.loc[:,lexical_covariates+gaze_covariates] = covariates.loc[:,lexical_covariates+gaze_covariates].apply(lambda x: (x-x.mean())/x.std(), axis=0)
-            covariates = covariates.fillna(0)
-                        # trick to get trl and trldict 
-            annot_to_model = mne.Annotations(onset=events_to_model['latency_sec'], duration=events_to_model['duration_sec'], description=events_to_model['task+type'])
+            covariates = covariates.fillna(0) # so equiv to mean over non nulls
+
+            # trick to get trl and trldict 
+            annot_to_model = mne.Annotations(onset=events_to_model['latency_sec'], 
+                                             duration=events_to_model['duration_sec'], 
+                                             description=events_to_model['task+type'])            
             EEG.set_annotations(annot_to_model)
             trl_to_model, trldict_to_model = mne.events_from_annotations(EEG, regexp='.*Fixation|.*Blink')
-
+            # check covariates same length as trl 
+            if len(covariates) != len(trl_to_model):
+                print(f'{pID} covariates and trl are different lengths')
+                # get matching eeg_samples from trl first column and coviarates eeg_sample
+                trl_eeg_samples = trl_to_model[:,0]
+                cov_eeg_samples = covariates['eeg_sample']
+                common = np.intersect1d(trl_eeg_samples, cov_eeg_samples)
+                covariates = covariates[covariates['eeg_sample'].isin(common)]
+                trl_to_model = trl_to_model[np.isin(trl_to_model[:,0], common)]
+            # check if covariates is singular
+            if np.linalg.matrix_rank(covariates) < covariates.shape[1]:
+                print(f'{pID} covariates are singular')
+                skip_reasons[pID] = 'singular covariates'
+                continue
+            
+            ##### count fixations per categorical condition
+            cond_counts = {}
+            for cond in ['MW=0','MW=1']:
+                cond_counts[cond] = (events_to_model[cond]).sum()
+                if cond_counts[cond] < 60:
+                    print(f'{pID} has fewer than 60 fixations in condition {cond}')
+                    skip_reasons[pID] = 'fewer than 60 fixations per condition'
+            cond_counts['FixationWord'] = (events_to_model['task+type'].str.contains('FixationWord').sum())
+            cond_counts['pID'] = pID
+            cond_counts_all.append(cond_counts)
             ##### model
             tmin, tmax = -0.3, 0.8
             loglevelwas = mne.set_log_level('WARNING', return_old_level=True)
@@ -204,12 +235,13 @@ if REDO:
                     reject={'eeg': 120e-6}, # uV, as in DImigen Ehinger 2019
                     tstep=1,
                     decim=decimation, #TODO: replace w 1 when finalized
-                    covariates=covariates, 
+                    covariates=covariates.drop(columns=['eeg_sample']), 
                     model = partial(ridge_model, alpha=ridge_alpha),
                     estimate_stats=False
                 )
             except Exception as e:
                 print(f'Error in fitting model for {pID}: {e}')
+                skip_reasons[pID] = 'model fitting error: ' + str(e)
                 continue
             ##### save stats
             save_fn = os.path.join(dir_out, f'{pID}_rERP_stats.npz')
@@ -268,7 +300,7 @@ pIDs_remove_chance = []
 for pID in pIDs:
     beh_df_i = beh_df[beh_df['ParticipantID']==pID]
     comp_scores=[]
-    print(f'\n----pID: {pID}----')
+    # print(f'\n----pID: {pID}----')
     for pat in comp_pat:
         comp = beh_df_i.columns.str.contains(pat)
         comp_score = beh_df_i.loc[:,comp]
@@ -280,17 +312,18 @@ for pID in pIDs:
     pvals, res = comprehension_above_chance(comp_scores['score'].astype(int).values, comp_scores['nafc'].values)
     print(f'{pID} combined weighted comprehension p-value: {res.pvalue:.3f}')
     if res.pvalue > 0.05:
-        print(f'!!!{pID} comprehension is not different from chance, skipping')
+        # print(f'!!!{pID} comprehension is not different from chance, skipping')
         skip_reasons[pID] = 'comprehension not different from chance'
         pIDs_remove_chance.append(pID)
     # check % MW
     MW = beh_df_i['MW'].mean()
-    if MW < 0.2 or MW > 0.8:
-        print(f'!!!{pID} has {MW:.0%} MW, skipping')
-        skip_reasons[pID] = 'MW outside 20-80%'
+    if MW < 0.1 or MW > 0.9:
+        # print(f'!!!{pID} has {MW:.0%} MW, skipping')
+        skip_reasons[pID] =  'MW outside 10-90%'
         pIDs_remove_MW.append(pID)
     else:
-        print(f'{pID} has {MW:.0%} MW')
+        pass
+        # print(f'{pID} has {MW:.0%} MW')
 # pIDs_remove = pIDs_remove_MW + pIDs_remove_chance
 # pIDs = [p for p in pIDs if p not in pIDs_remove]
 # print(f'\n\n---{len(pIDs)} subjects remaining after removing {len(pIDs_remove_chance)} due to chance performance and {len(pIDs_remove_MW)} imbalanced MW scores---')
@@ -298,20 +331,27 @@ for pID in pIDs:
 skip_reasons = pd.Series(skip_reasons)
 skip_reasons.to_csv(os.path.join(dir_out, 'skip_reasons.csv'))
 
-#%% exclusions
+# %% exclusions
 SKIP_N = True
-SKIP_COMP = False
+SKIP_COMP = True
 SKIP_MW = True
 
 # load skip_reasons
 if SKIP_N:
+    pIDs_before = pIDs
     pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'fewer than 60 fixations per condition (MW*REFIXATION)']
+    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to fewer than 60 fixations per condition (MW*REFIXATION)')
 if SKIP_COMP:
+    pIDs_before = pIDs
     pIDs = [p for p in pIDs if skip_reasons.get(p,'')!= 'comprehension not different from chance']
+    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to comprehension not different from chance')
 if SKIP_MW:
-    pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'MW outside 20-80%']
+    pIDs_before = pIDs
+    pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'MW outside 10-90%']
+    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to MW outside 10-90%')
 print(f'{len(pIDs)} subjects remaining after skipping')
 
+# %%
 rERP_list = []
 for pID in pIDs:
     rERP = mne.read_evokeds(os.path.join(dir_out, f'{pID}_rERP-evk.fif'))
@@ -376,6 +416,7 @@ contrast_conds =  [
     'INBOUND_SAC_AMPLITUDE',
                 ]
 channels = ['CPz']
+
 for cc in contrast_conds:
     for ch in channels:
         if isinstance(ch, str):
@@ -402,7 +443,7 @@ for cc in contrast_conds:
         plotdict = {k:rERP_ALL[k] for k in cc}
         ax=plot_cluster(clusters, cluster_p_values,times, ax, tcfe=False)  
         # hold on 
-        ax=mne.viz.plot_compare_evokeds(plotdict, picks=ch , axes=ax, combine='mean', show_sensors=False)
+        ax=mne.viz.plot_compare_evokeds(plotdict, picks=ch , axes=ax, combine='mean')
         fig.suptitle(f'Group-level {contrast_name}')
         fig.savefig(os.path.join(dir_out, f"Group_n=({len(rERP_list)})_{contrast_name.replace('/','-')}_{'+'.join(ch)}.png"))
     if len(cc) == 1:

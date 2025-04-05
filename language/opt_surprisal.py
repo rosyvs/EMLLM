@@ -61,7 +61,8 @@ ia_label_mapping['relative_word_position'] = ia_label_mapping['word_in_sentence'
 # %% frequency
 from wordfreq import word_frequency
 ia_label_mapping['word_freq'] = ia_label_mapping['IA_LABEL'].apply(lambda x: word_frequency(x, 'en'))
-
+# log transom
+ia_label_mapping['log_word_freq'] = ia_label_mapping['word_freq'].apply(lambda x: np.log(x) if x > 0 else np.nan)
 # %% is function word
 from nltk.corpus import stopwords
 def is_function_word(word):
@@ -115,3 +116,33 @@ ia_label_mapping['gpt2_surprisal_page'].hist(bins=100)
 ia_label_mapping.to_csv('../info/ia_label_mapping_opt_surprisal.csv', index=False)   
 ia_label_mapping= pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
 
+# %% load back in just for plotting
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_theme()
+ia_label_mapping = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv')
+
+# get correl between surprisal and word frequency, scatter plot
+plt.figure(figsize=(10,5))
+sns.scatterplot(data=ia_label_mapping, x='log_word_freq', y='gpt2_surprisal_page')
+plt.title('Surprisal values')
+plt.xlabel('Log Word Frequency')
+plt.ylabel('Surprisal')
+# text on plot giving correl
+corr = ia_label_mapping['word_freq'].corr(ia_label_mapping['gpt2_surprisal_page'])
+plt.text(0.1, 0.9, f'Correlation: {corr:.2f}', fontsize=12, transform=plt.gca().transAxes)
+plt.show()
+
+# get correl matrix between surprisal, word frequency, relative word position, sentence word count
+# 1. for all words
+corr = ia_label_mapping[['gpt2_surprisal_page', 'log_word_freq', 'relative_word_position', 'sentence_word_count']].corr()
+plt.figure(figsize=(10,5))
+sns.heatmap(corr, annot=True, cmap='coolwarm', center=0)
+plt.title('Correlation matrix: all words')
+plt.show()
+# 2. for only content words
+corr = ia_label_mapping[~ia_label_mapping['stop_word']][['gpt2_surprisal_page', 'log_word_freq', 'relative_word_position', 'sentence_word_count']].corr()
+plt.figure(figsize=(10,5))              
+sns.heatmap(corr, annot=True, cmap='coolwarm', center=0)
+plt.title('Correlation matrix: content words only')
+# %%

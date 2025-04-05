@@ -406,11 +406,14 @@ def plot_with_stats(evk, pvals, channel='CPz', ax=None, alpha=0.05):
             ax.axvspan(erp_times[p[0]], erp_times[p[1]], color='r', alpha=0.3)
     return ax
 
-def plot_cluster(clusters, cluster_p_values, times, ax, tcfe=False): #TODO output is different for tcfe - modify plot fn
+def plot_cluster(clusters, cluster_p_values, times, ax, add_text=True, tcfe=False): #TODO output is different for tcfe - modify plot fn
     h=None
     for i_c, c in enumerate(clusters):
         if cluster_p_values[i_c] <= 0.05:
             h = ax.axvspan(times[c[0]][0], times[c[0]][-1],color="r", alpha=0.3)
+            if add_text:
+                ax.text(times[c[0]][0], 0, 
+                f"p = {cluster_p_values[i_c]:.3f}\nt = {times[c[0]][0]:.3f}-{times[c[0]][-1]:.3f}", color="k", fontsize=6)
     if h:
         ax.legend((h,), ("cluster p-value < 0.05",))
     # ax.set_xlabel("time (ms)")

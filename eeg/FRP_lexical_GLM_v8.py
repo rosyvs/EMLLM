@@ -37,7 +37,7 @@ FORCE_REDO = False
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
 decimation = 10 #TODO: set to 1 for final pass analysis
 ridge_alpha=1
-verstr = f'FRP_TRF_lexical_{vnum}_alpha{ridge_alpha}_decim{decimation}'
+verstr = f'FRP_TRF_lexical_v{vnum}_alpha{ridge_alpha}_decim{decimation}'
 dir_out = os.path.join(dir_out_par, verstr)
 
 

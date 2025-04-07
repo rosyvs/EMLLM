@@ -424,7 +424,7 @@ def ttest_rel_nop(*args):
     tvals, _ = ttest_rel(*args)
     return tvals
 
-def comprehension_above_chance(x,n):
+def comprehension_above_chance(x,n, printout=False):
     pvals = []
     weights=[]
     for n_i in np.unique(n):
@@ -432,9 +432,9 @@ def comprehension_above_chance(x,n):
         p = 1/n_i
         # binomial test
         res = scipy.stats.binomtest(x_i.sum(), n=len(x_i), p=p)
-        if res.pvalue > 0.05:
+        if res.pvalue > 0.05 and printout:
             print(f'performance on {n_i} alternatives is {x_i.sum()}/{len(x_i)} ({x_i.sum()/len(x_i):.2f}) which is not different from chance (p={res.pvalue:.2f})')
-        else:
+        elif printout:
             print(f'performance on {n_i} alternatives is {x_i.sum()}/{len(x_i)} ({x_i.sum()/len(x_i):.2f}) which is different from chance (p={res.pvalue:.2f})')
         pvals += [res.pvalue]
         weights += [len(x_i)]

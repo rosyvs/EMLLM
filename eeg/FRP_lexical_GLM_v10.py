@@ -395,7 +395,7 @@ for pID in pIDs:
 
 #%% exclusions
 SKIP_N = True
-SKIP_COMP = True
+SKIP_COMP = False
 SKIP_MW = True
 
 # check skip_reasons
@@ -420,17 +420,16 @@ skip_reasons.to_csv(os.path.join(dir_out, 'skip_reasons.csv'))
 # %% reformat group results to a dict of condition keys and values is a list of evokeds one from each subject
 rERP_ALL = {}
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
-            # ##### make rERPs from condition combinations
-            # rERP['FRP'] = rERP['reading/Fixation'] # this is the main fixation response potential
-            # rERP['FRP_WORD'] = mne.combine_evoked([rERP['WORD'], rERP['reading/Fixation']], weights=[1, 1])
-            # rERP['FRP_STOP'] = mne.combine_evoked([rERP['STOP'], rERP['reading/Fixation']], weights=[1, 1])
-            # rERP['FRP_PUNC'] = mne.combine_evoked([rERP['PUNC'], rERP['reading/Fixation']], weights=[1, 1]) 
-            # rERP['FRP_MW=0'] = mne.combine_evoked([rERP['MW=0'], rERP['reading/Fixation']], weights=[1, 1])
-            # rERP['FRP_MW=1'] = mne.combine_evoked([rERP['MW=1'], rERP['reading/Fixation']], weights=[1, 1])
-            # rERP['FRP_WORD_MW=0'] = mne.combine_evoked([rERP['FRP_WORD'], rERP['MW=0'], rERP['WORD_MW=0']], weights=[1, 1,1])
-            # rERP['FRP_WORD_MW=1'] = mne.combine_evoked([rERP['FRP_WORD'], rERP['MW=1'], rERP['WORD_MW=1']], weights=[1, 1,1])
 cond_combinations = {
     'ButtonPress':  ['reading/ButtonPress','sham/ButtonPress'],
+    'FRP': 'reading/Fixation',
+    'FRP_WORD': ['reading/Fixation','WORD'],
+    'FRP_STOP': ['reading/Fixation','STOP'],
+    'FRP_PUNC': ['reading/Fixation','PUNC'],
+    'FRP_MW=0': ['reading/Fixation','MW=0'],
+    'FRP_MW=1': ['reading/Fixation','MW=1'],
+    'FRP_WORD_MW=0': ['WORD','MW=0','WORD_MW=0'],
+    'FRP_WORD_MW=1': ['WORD','MW=1','WORD_MW=1'],
 }
 condnames = {}
 for pID in pIDs:
@@ -482,6 +481,7 @@ contrast_conds =  [
     ['WORD_MW=0','WORD_MW=1'],
     ['surprisal_WORD_MW=0','surprisal_WORD_MW=1'],
     ['log_word_freq_WORD_MW=0','log_word_freq_WORD_MW=1'],
+    ['relative_word_position_WORD_MW=0','relative_word_position_WORD_MW=1'],
     'surprisal_WORD','log_word_freq_WORD','relative_word_position_WORD',
     'ButtonPress',
     'Blink'

@@ -203,8 +203,7 @@ if REDO:
                 for c in cognitive_covariates:
                     fixations[f'{l}_{c}'] = np.where(fixations[c] == 1, fixations[l], np.nan)
                     lexical_covariates_2.append(f'{l}_{c}')
-            lexical_covariates =  lexical_covariates + lexical_covariates_2 # in this case the new ones are perfectly collinear with main effect of the original lexical vars so we drop them to prevent signular covariate matrix
-    
+            lexical_covariates =  lexical_covariates + lexical_covariates_2 
             ##### add blinks , buttonpress
             blinks['task+type'] = 'Blink'
             blinks.set_index('eeg_sample', inplace=True)

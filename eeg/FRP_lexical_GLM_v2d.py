@@ -35,7 +35,7 @@ dir_out_par = '/Volumes/Blue1TB/EEG_processed/'
 REDO = True
 FORCE_REDO = False
 channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
-decimation = 10 #TODO: set to 1 for final pass analysis
+decimation = 1 #TODO: set to 1 for final pass analysis
 ridge_alpha=1
 verstr = f'FRP_TRF_lexical_v{vnum}_alpha{ridge_alpha}_decim{decimation}'
 dir_out = os.path.join(dir_out_par, verstr)
@@ -74,8 +74,8 @@ pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
 
 # #####
 # pIDs = ['EML1_156','EML1_158','EML1_176','EML1_177'] #TMP
-# resume_from = 'EML1_070'
-# pIDs = pIDs[pIDs.index(resume_from):]
+resume_from = 'EML1_051'
+pIDs = pIDs[pIDs.index(resume_from):]
 # #####
 
 
@@ -250,7 +250,7 @@ if REDO:
             save_fn = os.path.join(dir_out, f'{pID}_rERP_stats.npz')
             np.savez(save_fn, **stats)
 
-            fig=rERP['reading/FixationWord'].plot()
+            fig=rERP['reading/Fixation'].plot()
             fig.savefig(os.path.join(dir_out, f'{pID}_FRP_butterfly.png'))
             rERP['FRP_MW=0'] = mne.combine_evoked([rERP['MW=0'], rERP['reading/Fixation']], weights=[1, 1])
             rERP['FRP_MW=1'] = mne.combine_evoked([rERP['MW=1'], rERP['reading/Fixation']], weights=[1, 1])

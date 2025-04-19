@@ -287,6 +287,72 @@ if REDO:
 
 #%% read in already processed data
 pIDs = [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_out) if f.endswith('_rERP-evk.fif')]
+
+try:
+    skip_reasons = pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
+except:
+    skip_reasons = {}
+#%% screen subjects comrpehension scores
+comp_pat = ['Rote','Inf','Deep','SVT']
+comp_nafc = [4, 2, 4, 3]
+pIDs_before = pIDs
+pIDs_remove_MW = []
+pIDs_remove_chance = []
+for pID in pIDs:
+    beh_df_i = beh_df[beh_df['ParticipantID']==pID]
+    comp_scores=[]
+    # print(f'\n----pID: {pID}----')
+    for pat in comp_pat:
+        comp = beh_df_i.columns.str.contains(pat)
+        comp_score = beh_df_i.loc[:,comp]
+        # pivot longer
+        comp_score = comp_score.melt(value_name='score').dropna()
+        comp_score['nafc'] = comp_nafc[comp_pat.index(pat)]
+        comp_scores.append(comp_score)
+    comp_scores = pd.concat(comp_scores)
+    pvals, res = comprehension_above_chance(comp_scores['score'].astype(int).values, comp_scores['nafc'].values)
+    print(f'{pID} combined weighted comprehension p-value: {res.pvalue:.3f}')
+    if res.pvalue > 0.05:
+        # print(f'!!!{pID} comprehension is not different from chance, skipping')
+        skip_reasons[pID] = 'comprehension not different from chance'
+        pIDs_remove_chance.append(pID)
+    # check % MW
+    MW = beh_df_i['MW'].mean()
+    if MW < 0.1 or MW > 0.9:
+        # print(f'!!!{pID} has {MW:.0%} MW, skipping')
+        skip_reasons[pID] =  'MW outside 10-90%'
+        pIDs_remove_MW.append(pID)
+    else:
+        pass
+        # print(f'{pID} has {MW:.0%} MW')
+# pIDs_remove = pIDs_remove_MW + pIDs_remove_chance
+# pIDs = [p for p in pIDs if p not in pIDs_remove]
+# print(f'\n\n---{len(pIDs)} subjects remaining after removing {len(pIDs_remove_chance)} due to chance performance and {len(pIDs_remove_MW)} imbalanced MW scores---')
+# print(f'removed the following subjects: {", ".join(pIDs_remove)}')
+skip_reasons = pd.Series(skip_reasons)
+skip_reasons.to_csv(os.path.join(dir_out, 'skip_reasons.csv'))
+
+# %% exclusions
+SKIP_N = False
+SKIP_COMP = False
+SKIP_MW = False
+
+# load skip_reasons
+if SKIP_N:
+    pIDs_before = pIDs
+    pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'fewer than 60 fixations per condition (MW*REFIXATION)']
+    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to fewer than 60 fixations per condition (MW*REFIXATION)')
+if SKIP_COMP:
+    pIDs_before = pIDs
+    pIDs = [p for p in pIDs if skip_reasons.get(p,'')!= 'comprehension not different from chance']
+    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to comprehension not different from chance')
+if SKIP_MW:
+    pIDs_before = pIDs
+    pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'MW outside 10-90%']
+    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to MW outside 10-90%')
+print(f'{len(pIDs)} subjects remaining after skipping')
+
+# %% temp: force orig 100 pIDs
 pIDs = ['EML1_028',
  'EML1_032',
  'EML1_034',
@@ -387,69 +453,6 @@ pIDs = ['EML1_028',
  'EML1_166',
  'EML1_169',
  'EML1_181']
-try:
-    skip_reasons = pd.read_csv(os.path.join(dir_out, 'skip_reasons.csv'), index_col=0).to_dict()['0']
-except:
-    skip_reasons = {}
-#%% screen subjects comrpehension scores
-comp_pat = ['Rote','Inf','Deep','SVT']
-comp_nafc = [4, 2, 4, 3]
-pIDs_before = pIDs
-pIDs_remove_MW = []
-pIDs_remove_chance = []
-for pID in pIDs:
-    beh_df_i = beh_df[beh_df['ParticipantID']==pID]
-    comp_scores=[]
-    # print(f'\n----pID: {pID}----')
-    for pat in comp_pat:
-        comp = beh_df_i.columns.str.contains(pat)
-        comp_score = beh_df_i.loc[:,comp]
-        # pivot longer
-        comp_score = comp_score.melt(value_name='score').dropna()
-        comp_score['nafc'] = comp_nafc[comp_pat.index(pat)]
-        comp_scores.append(comp_score)
-    comp_scores = pd.concat(comp_scores)
-    pvals, res = comprehension_above_chance(comp_scores['score'].astype(int).values, comp_scores['nafc'].values)
-    print(f'{pID} combined weighted comprehension p-value: {res.pvalue:.3f}')
-    if res.pvalue > 0.05:
-        # print(f'!!!{pID} comprehension is not different from chance, skipping')
-        skip_reasons[pID] = 'comprehension not different from chance'
-        pIDs_remove_chance.append(pID)
-    # check % MW
-    MW = beh_df_i['MW'].mean()
-    if MW < 0.1 or MW > 0.9:
-        # print(f'!!!{pID} has {MW:.0%} MW, skipping')
-        skip_reasons[pID] =  'MW outside 10-90%'
-        pIDs_remove_MW.append(pID)
-    else:
-        pass
-        # print(f'{pID} has {MW:.0%} MW')
-# pIDs_remove = pIDs_remove_MW + pIDs_remove_chance
-# pIDs = [p for p in pIDs if p not in pIDs_remove]
-# print(f'\n\n---{len(pIDs)} subjects remaining after removing {len(pIDs_remove_chance)} due to chance performance and {len(pIDs_remove_MW)} imbalanced MW scores---')
-# print(f'removed the following subjects: {", ".join(pIDs_remove)}')
-skip_reasons = pd.Series(skip_reasons)
-skip_reasons.to_csv(os.path.join(dir_out, 'skip_reasons.csv'))
-
-# %% exclusions
-SKIP_N = False
-SKIP_COMP = False
-SKIP_MW = False
-
-# load skip_reasons
-if SKIP_N:
-    pIDs_before = pIDs
-    pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'fewer than 60 fixations per condition (MW*REFIXATION)']
-    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to fewer than 60 fixations per condition (MW*REFIXATION)')
-if SKIP_COMP:
-    pIDs_before = pIDs
-    pIDs = [p for p in pIDs if skip_reasons.get(p,'')!= 'comprehension not different from chance']
-    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to comprehension not different from chance')
-if SKIP_MW:
-    pIDs_before = pIDs
-    pIDs = [p for p in pIDs if skip_reasons.get(p,'') != 'MW outside 10-90%']
-    print(f'removed {len(pIDs_before)-len(pIDs)} subjects due to MW outside 10-90%')
-print(f'{len(pIDs)} subjects remaining after skipping')
 
 # %%
 rERP_list = []

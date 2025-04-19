@@ -87,5 +87,7 @@ if len(v2c_not_in_decim10) > 0:
 
 # %% just IDs from v2_decim10
 v2 = fitted_pIDs[fitted_pIDs['v2_decim10']].index.tolist()
-
+print(f"Number of participants processed in v2_decim10: {len(v2)}")
+print("Participants processed in v2_decim10:")
+print(v2)
 # %%

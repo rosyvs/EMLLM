@@ -441,3 +441,32 @@ def comprehension_above_chance(x,n, printout=False):
     # weighted mean p value
     res = scipy.stats.combine_pvalues(pvals, method='stouffer', weights = weights)
     return pvals, res
+
+# function to detect collinear colum groups in X using qr from scipy
+def detect_collinear(X, tol=1e-5):
+    """Detect collinear columns in X using QR decomposition."""
+    Q, R = scipy.linalg.qr(X, mode='economic')
+    # Find the rank of R
+    rank = np.sum(np.abs(np.diag(R)) > tol)
+    # Find the indices of the linearly dependent columns
+    collinear_indices = np.where(np.abs(np.diag(R)) <= tol)[0]
+    return collinear_indices
+
+def ix_to_regressor_label(ix, regressor_indices):
+    """Convert indices to regressor labels."""
+    for key, value in regressor_indices.items():
+        if ix >= value[0] and ix < value[1]:
+            return key
+    return None
+
+def collinear_regressors(X, regressor_indices):
+    """Detect collinear regressors in X using QR decomposition."""
+    if isinstance(X, scipy.sparse.csr_matrix):
+        X = X.toarray()
+    # get the indices of the collinear columns
+    collinear_indices = detect_collinear(X)
+    # get the labels of the collinear regressors
+    collinear_regressors = [ix_to_regressor_label(i, regressor_indices) for i in collinear_indices]
+    # remove duplicates
+    collinear_regressors = list(set(collinear_regressors))
+    return collinear_regressors

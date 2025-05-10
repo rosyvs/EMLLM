@@ -1,0 +1,606 @@
+#%%
+import mne
+import re
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import glob
+import os
+import meegkit
+from mne.datasets import sample
+# from mne.stats.regression import linear_regression_raw
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
+import scipy
+from functools import partial
+import seaborn as sns
+sns.set_palette("tab10")
+import traceback
+import string
+from zuco_data import load_mat_file, get_block_no, get_fix_df, label_fixations_with_event, get_event_dict, mne_from_zucoeeg, sentence_to_fix_seq
+from mne_custom_regression import ridge_regression_raw, ridge_model, plot_with_stats, plot_cluster, comprehension_above_chance
+from language.lexical import strip_punc, remove_punc
+# get current dir to construct relative paths
+dir_path = os.path.dirname(os.path.realpath(__file__))
+os.chdir(dir_path)
+pd.options.mode.chained_assignment = None  # default='warn'
+plt.ioff()
+
+#%% paths
+dir_out_par = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EML Rosy/Data/EEG_processed/'
+REDO = False
+FORCE_REDO = False
+decimation = 1 #TODO: set to 1 for final pass analysis
+ridge_alpha = 1
+verstr = f'ZuCo_FRP_TRF_v2_lexical_decim{decimation}' # this version = not just word fixaitons
+dir_out = os.path.join(dir_out_par, verstr)
+os.makedirs(dir_out, exist_ok=True)
+ZUCO_ET_SRATE = 500
+
+# %% 
+path_to_zuco = '/Users/roso8920/Emotive Computing Dropbox/Rosy Southwell/EEG-Gaze/ZuCo/osfstorage'
+subdir = 'task1- SR/Preprocessed/'
+subdir_combined = 'task1- SR/Matlab files'
+def read_text(fn):
+    with open(fn) as f:
+        return f.readlines()
+sentences = read_text('../info/zuco_sentencesSR.txt')
+
+ia_df = pd.read_csv('../info/zuco_gpt_surprisal.csv')
+ia_df['log_word_freq'] = ia_df['word_freq'].astype(float).apply(np.log).replace(-np.inf, np.nan)
+ia_df = ia_df.rename(columns = {'gpt2_surprisal':'surprisal'})
+ia_df['word_ix'] = ia_df['word_in_sentence'].astype(int)
+beh_df = pd.DataFrame()
+
+pIDs = [
+'ZJS', 'ZMG','ZGW',
+ 'ZPH', 'ZKB',   'ZDM', 'ZDN', 'ZJM','ZKW',
+'ZKH', 'ZAB',]
+# pIDs = ['ZPH']
+skip_reasons = {}
+
+
+# %% funkies
+
+
+def drop_duplicates_within_tolerance(df, subset, tolerance=None, keep='first'):
+    """
+    Drop duplicate rows within a specified tolerance for numeric columns.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame to drop duplicates from
+    subset : list or str
+        Column or list of columns to consider for identifying duplicates
+    tolerance : float or dict
+        Tolerance value(s) for determining duplicates. Can be a single float for all columns
+        or a dict mapping column names to their specific tolerance values
+    keep : {'first', 'last', False}, default 'first'
+        Which duplicates to keep
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame with duplicates removed
+    """
+    if isinstance(subset, str):
+        subset = [subset]
+    if isinstance(tolerance, (int, float)):
+        tolerance = {col: tolerance for col in subset}
+    elif isinstance(tolerance, (list, tuple)) and len(tolerance) == len(subset):
+        # If tolerance is a list or tuple, convert to dict
+        tolerance = {col: val for col, val in zip(subset, tolerance)}
+    elif isinstance(tolerance, str):
+        raise ValueError("Tolerance is a string, it should be a numeric value or a dict. ")
+    elif tolerance is None:
+        # use 0 
+        tolerance = {col: 0 for col in subset}  # Default to 0 if no tolerance provided
+    print(tolerance)
+    # Make a copy to avoid modifying the original
+    result_df = df.copy()
+    
+    # Create temporary rounded columns for comparison
+    for col in subset:
+        if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+            # Round to the nearest tolerance value
+            result_df[f'__{col}_rounded'] = (df[col] / tolerance[col]).round() * tolerance[col]
+        else:
+            # For non-numeric columns, keep as is
+            result_df[f'__{col}_rounded'] = df[col]
+    
+    # Drop duplicates based on the rounded columns
+    rounded_cols = [f'__{col}_rounded' for col in subset]
+    result_idx = result_df.drop_duplicates(subset=rounded_cols, keep=keep).index
+    
+    # Drop the temporary columns and return
+    return df.loc[result_idx].reset_index(drop=True)
+
+def add_scalar_col(df, x, colname = 'block_no'):
+    df[colname] = x
+    return df
+
+
+
+
+
+
+#%% read raw ZuCo EEEG and ET
+
+EGImontage = mne.channels.make_standard_montage('GSN-HydroCel-129')
+for pID in pIDs:
+    # read in sentenceData for htis subj and use to get word onsets to align  w raw EEG
+    sentence_file = os.path.join(path_to_zuco, subdir_combined, 'results'+pID+'_SR.mat')
+    sentenceData = load_mat_file(sentence_file)['sentenceData']
+    sequences=[]
+    for i,sent in enumerate(sentenceData):
+        sequence = sentence_to_fix_seq(sent)
+        sequence['sentence_disp_ix'] = i 
+        if len(sequence['fixations'])>0:
+            sequence['fixations']['sentence_disp_ix'] = i
+            sequence['fixations']['Text'] = sequence['content']
+            sequences.append(sequence)
+    word_fixations = pd.concat([s['fixations'] for s in sequences]).reset_index()
+    word_EEGs = [s['EEG'] for s in sequences]
+    # unpack sublists
+    word_EEGs = [item for sublist in word_EEGs for item in sublist]
+    word_fixations['word_norm'] = word_fixations['word'].str.lower().str.strip(string.punctuation)
+    ia_df['word_norm'] = ia_df['word'].str.lower().apply(strip_punc)
+    ia_df['Text_norm'] = ia_df['Text'].str.lower().apply(remove_punc)
+    
+    word_fixations['Text_norm'] = word_fixations['Text'].str.lower().apply(remove_punc)
+    word_fixations['overall_index'] = word_fixations.index # use later for alinging with EEG list
+    # sentence_ix is the index of the sentence in the ia df but this might not be the same as the order which sentences were displayed in, sentence_disp_ix
+    len_before = len(word_fixations)
+    word_fixations = word_fixations.merge(ia_df, how='left', on=['word_norm', 'Text_norm','word_ix'], suffixes=('','_ia'))
+    len_after = len(word_fixations)
+    assert len_after == len_before, f'{pID} word fixations changed length after merging with ia_df, check why not a unique mapping {len_before} != {len_after}'
+    # some NA in fix onset means unusable
+    word_fixations = word_fixations.dropna(subset=['fix_onset_latency'])
+    word_fixations['fix_onset_latency'] = word_fixations['fix_onset_latency'].astype(float)
+
+    # get raw ("preprocessed") EEG and ET files
+    pID_eeg_files = [f for f in os.listdir(os.path.join(path_to_zuco,subdir,pID)) if pID in f and 'EEG' in f]
+    pID_et_files = [f for f in os.listdir(os.path.join(path_to_zuco,subdir,pID)) if pID in f and 'ET' in f]
+
+    val_to_event = get_event_dict(ver = 1, task=1)
+    pID_eeg_files = sorted(pID_eeg_files, key=get_block_no)
+    pID_et_files = sorted(pID_et_files, key=get_block_no)
+    # get block nos and checl each has eeg and et
+    block_nos = [get_block_no(f) for f in pID_eeg_files]
+    files_by_block = {}
+    for block_no in block_nos:
+        files_by_block[block_no] = {'EEG': None, 'ET': None}
+    for f in pID_eeg_files:
+        block_no = get_block_no(f)
+        files_by_block[block_no]['EEG']=f
+    for f in pID_et_files:
+        block_no = get_block_no(f)
+        files_by_block[block_no]['ET']=f
+    all_blocks = []
+    for b,files in files_by_block.items():
+        block_data = {}
+        eeg_file = files['EEG']
+        et_file = files['ET']
+        print(eeg_file, et_file)
+        word_fixations_block = word_fixations.copy()
+        word_EEGs_block = word_EEGs.copy()
+        if eeg_file and et_file:
+            et = load_mat_file(os.path.join(path_to_zuco,subdir,pID, et_file))
+            et_events = pd.DataFrame(et['event'], columns=['latency','value'])
+            et_events['event'] = et_events['value'].astype(int).map(val_to_event)
+            fix_df = get_fix_df(et)
+            # merge events and fixations
+            fix_df = label_fixations_with_event(fix_df, et_events)
+            mne_raw, eeg_events_df = mne_from_zucoeeg(os.path.join(path_to_zuco,subdir,pID, eeg_file), event_dict=val_to_event)
+            # get list of et and eeg events and check they7 match
+            # filter et_events by value 10 or 11
+            et_events_reading = et_events[et_events['value'].isin([10,11])].reset_index(drop=True)
+            eeg_events_reading = eeg_events_df[eeg_events_df['value'].isin([10,11])].reset_index(drop=True)
+            # concatenate the two horizontally and put prefix _eyetracker or _eeg in column names
+            events = pd.concat([et_events_reading.add_prefix('eye_'), eeg_events_reading.add_prefix('eeg_')], axis=1)
+            # cehck event value/tyoe matches between eye and eeg cols
+            events['match'] = events['eye_value'] == events['eeg_value']
+            events['duration_sec'] = events['eeg_latency'].diff().shift(-1)/mne_raw.info['sfreq']
+            events['event_type'] = 'ButtonPress'
+            # make a unique identifier col with eeg_type and enumerate it, then block
+            events['temp_count'] = events.groupby('eeg_value').cumcount()
+            events['identifier'] = 'block' + str(b) + '_' + events['eeg_type'].astype(str) + '_' + events['temp_count'].astype(str)
+            # make a linear interpolator to get eeg_latency from eye latency
+            eeg_interpolator = scipy.interpolate.interp1d(events['eye_latency'], events['eeg_latency'], fill_value='extrapolate')
+            fix_df['eeg_latency'] = (eeg_interpolator(fix_df['latency'])).astype(int)
+            fix_df['eeg_latency_sec'] = fix_df['eeg_latency']/mne_raw.info['sfreq']
+            fix_df['duration_sec'] = fix_df['duration']/1000 # pretty sure its originally in ms not sampels 
+            fix_df['identifier'] = fix_df.apply(lambda row: f'block{b}_ix{int(row.name)}_eegix{row.eeg_latency}', axis=1) # unique identifier for each fixation in the block
+            word_fixations_block = word_fixations.copy() # TODO: necc? 
+
+            # timestamp diagnostics
+            print(f'fix_df latency range: {fix_df["latency"].min()} - {fix_df["latency"].max()}')
+            print(f'eeg_events_df latency range: {eeg_events_df["latency"].min()} - {eeg_events_df["latency"].max()}')
+            print(f'word_fixations fix_onset_latency range: {word_fixations_block["fix_onset_latency"].min()} - {word_fixations_block["fix_onset_latency"].max()}')  
+            # match with words from the sentenceData
+            word_fixations_block['eeg_latency'] = eeg_interpolator(word_fixations_block['fix_onset_latency'])
+            word_fixations_block['eeg_latency_sec'] = word_fixations_block['eeg_latency']/mne_raw.info['sfreq']
+            # select only word fixations that correspond to the fixations in this block
+            word_fixations_block = word_fixations_block[word_fixations_block['fix_onset_latency'].between(fix_df['latency'].min(), fix_df['latency'].max())]
+            word_EEGs_block = [word_EEGs_block[i] for i in word_fixations_block.index]
+            word_fixations_block.reset_index(inplace=True, drop=True)
+            word_fixations_block['eeg_latency'] = word_fixations_block['eeg_latency'].astype(float).astype(int)
+
+            # check if all match
+            if not events['match'].all():
+                print(f'!!!{pID} block {b} events do not match between eye and eeg')
+            # make annotations for mne word fixations
+            word_fixations_block['identifier'] = word_fixations_block['sentence_disp_ix'].apply(lambda x: f'sentence{x:03d}') + '_' + word_fixations_block['word_ix'].astype(str) + '_' + word_fixations_block['count_on_word'].astype(str)
+            df_annot_word = pd.DataFrame({'onset': word_fixations_block['eeg_latency_sec'], 'duration': word_fixations_block['fix_duration']/mne_raw.info['sfreq'], 'description': word_fixations_block['identifier']})
+            df_annot_event = pd.DataFrame({'onset': events['eeg_latency_sec'], 'duration': events['duration_sec'], 'description': events['identifier']})
+            df_annot_fix = pd.DataFrame({'onset': fix_df['eeg_latency_sec'], 'duration': fix_df['duration_sec'], 'description': fix_df['identifier']})
+            df_annot = pd.concat([df_annot_word, df_annot_event, df_annot_fix], ignore_index=True).reset_index(drop=True)
+            annot = mne.Annotations(onset=df_annot['onset'], duration=df_annot['duration'], description=df_annot['description'])
+            block_data['rawEEG'] = mne_raw.set_annotations(annot)
+            block_data['rawET'] = et
+            block_data['events'] = events
+            block_data['fixations'] = fix_df
+            block_data['word_EEGs'] = word_EEGs_block
+            block_data['block_no'] = b
+            block_data['word_fixations'] = word_fixations_block
+            all_blocks.append(block_data)            
+            
+        else:
+            print(f'!!!{pID} block {b} does not have both EEG and ET files')
+    task_events = pd.concat([add_scalar_col(b['events'], b['block_no']) for b in all_blocks])
+    fixations = pd.concat([add_scalar_col(b['fixations'], b['block_no']) for b in all_blocks])
+    word_fixations = pd.concat([add_scalar_col(b['word_fixations'], b['block_no']) for b in all_blocks])
+    word_EEGs = [b['word_EEGs'] for b in all_blocks]
+    word_EEGs = [item for sublist in word_EEGs for item in sublist]
+    # drop duplicate word_fixaations on identifier
+    word_fixations = word_fixations.drop_duplicates(subset=['identifier'], keep='first').reset_index(drop=True)
+    print(f'\n-------')
+    print(f'len fixations: {len(fixations)}')
+    print(f'len word_fixations: {len(word_fixations)}')
+    EEG = mne.concatenate_raws([b['rawEEG'] for b in all_blocks])
+    EEG.set_montage(EGImontage)
+    # get back annotations from EEG now its been merged the timestmaps are different
+    annot_all = EEG.annotations.to_data_frame()
+    # onset is DateTimeArray but it shold just be seconds
+    annot_all['concat_eeg_latency_sec'] = (annot_all['onset'] - annot_all['onset'].iloc[0]).dt.total_seconds()
+    annot_all['concat_eeg_latency'] = (annot_all['concat_eeg_latency_sec']*EEG.info['sfreq']).astype(int)
+    fixations = fixations.merge(annot_all, left_on='identifier', right_on='description', suffixes=('','_concatEEG')) 
+
+    # merge with word_fixations on "description" col which is same as "identifier"
+    word_fixations['eeg_latency'] = word_fixations['eeg_latency'].astype(int)
+    word_fixations['duration_sec'] = word_fixations['fix_duration']/1000
+    word_fixations = word_fixations.merge(annot_all, left_on='identifier', right_on='description', suffixes=('','_concatEEG'))
+    task_events = task_events.merge(annot_all, left_on='eeg_latency_sec', right_on='concat_eeg_latency_sec', suffixes=('','_concatEEG'))
+    task_events['event_type'] = 'ButtonPress'
+    task_events['task'] = np.where(task_events['eeg_value'].isin([10,11]), 'reading', 'other')
+    # common columns, any extra will be filled w nan
+    cols = ['event_type','task','overall_index','sentence_ix','word_ix', 'count_on_word', 'identifier','word', 
+        'fix_duration','duration_sec', 'concat_eeg_latency','concat_eeg_latency_sec','block_no', 
+        'surprisal', 'log_word_freq', 'relative_word_position', 'stop_word']
+    
+    task_events = task_events[[c for c in cols if c in task_events.columns]]
+    word_fixations['event_type'] = 'FixationWord'
+    fixations['event_type'] = 'Fixation'
+    fixations_all = pd.concat([word_fixations,fixations], ignore_index=True) # combine word fixations and other fixations
+    # fixations_all = fixations_all.drop_duplicates(subset='concat_eeg_latency', keep='first')
+    fixations_all = drop_duplicates_within_tolerance(fixations_all, tolerance = 0.005,subset=['concat_eeg_latency'], keep='first')
+    # this will drop duplicate fixations within 5ms of each other which are likely the same fixation
+    fixations_all = fixations_all.sort_values(by='concat_eeg_latency')
+    # eeg_latency_sec needs to be recomputed for missing rows
+    fixations_all['task'] = 'reading'
+    fixations_all = fixations_all[(fixations_all['duration_sec'] > 0.05) & (fixations_all['duration_sec'] < 1)]
+    fixations_all = fixations_all[[c for c in cols if c in fixations_all.columns]]
+    events = pd.concat([fixations_all, task_events])
+    # fill in missing vals
+    events['eeg_sample'] = events['concat_eeg_latency'].astype(float).astype(int)
+    events['identifier'] = events['identifier'].fillna('') # some are NaN
+    events['task'] = events['task'].fillna('none') # some are NaN
+    events['event_type'] = events['event_type'].fillna('other') # some are NaN
+    events = events.drop_duplicates(subset=['eeg_sample'], keep='first') # drop duplicates on eeg_sample and identifier to ensure unique events
+    events = events.sort_values('eeg_sample').reset_index(drop=True) # sort by eeg_sample to ensure order is maintained
+    # merge lexical properties to events by IA_ID, which needs to be forced to be a string formatted as an integer not a float like 1.0
+    # make annotations from events
+    annot_all = mne.Annotations(onset=events['concat_eeg_latency_sec'], duration=events['duration_sec'], description=events['event_type'])
+    EEG.set_annotations(annot_all)
+    # save annotated EEG
+    EEG.save(os.path.join(dir_out, f'{pID}_raw-annot.fif'), overwrite=True)
+    # epoch EEG fixations
+    trl_to_model, trldict_to_model = mne.events_from_annotations(EEG, regexp='FixationWord')
+    tmin, tmax = -0.3, 0.8
+    epochs_word = mne.Epochs(EEG, trl_to_model, event_id=trldict_to_model, tmin=tmin, tmax=tmax, baseline=(-0.1, 0))
+
+    # plot some random word_fix epochs from EEg alongside the EEg from the sentenceData struct
+    events_word = events[events['event_type'] == 'FixationWord']
+    plot_ix = np.random.choice(len(events_word), 5, replace=False)
+    fig, axs = plt.subplots(len(plot_ix), 1, figsize=(10, 5*len(plot_ix)))
+    ch_ix = EEG.ch_names.index('E55')
+    for i, ep in enumerate(plot_ix):
+        epoch_mne = epochs_word[ep].get_data(picks='E55').squeeze()
+        # get index of E55 channel
+
+        t_mne = epochs_word[ep].times
+        epoch_zuc = word_EEGs[ep][ch_ix, ].squeeze()
+        t_zuc = np.linspace(tmin, tmax, len(epoch_zuc))
+        # plot
+        axs[i].plot(t_mne, epoch_mne, label='MNE')
+        axs[i].plot(t_zuc, epoch_zuc, label='ZuCo')
+        # legend 
+        axs[i].legend()  # Add legend for each subplot
+    plt.show()
+    # save the plot
+    fig.savefig(os.path.join(dir_out, f'{pID}_example_word_fixation_plot.png'))
+        
+#     ##### apply preprocessing to EEG (interp bads and reref alraedy done)
+#     EEG.filter(0.5, 15)  
+
+#     ##### covariates
+#     lexical_covariates = ['surprisal', 'log_word_freq', 'relative_word_position']
+#     gaze_covariates = []
+#     cognitive_covariates = [ ]
+
+#     # drop  duplicates on eeg sample taking into account decimation - GLM complains otherwise
+#     events_to_model = events.copy()
+#     events_to_model['eeg_sample_decim'] = (events_to_model['eeg_sample']/decimation).astype(int)
+#     print(f'length before drop duplicates: {len(events_to_model)}')
+#     events_to_model = events_to_model.drop_duplicates(subset=['eeg_sample_decim'], keep='first')
+#     print(f'length after drop duplicates: {len(events_to_model)}')
+#     # get covariates back oput of events now dupes have been droped
+#     covariates = events_to_model.loc[:,['eeg_sample']+lexical_covariates+gaze_covariates+cognitive_covariates]
+#     # scale and center copntinuous covariates (lex, gaze) but leave MW/refixations as is
+#     covariates.loc[:,lexical_covariates+gaze_covariates] = covariates.loc[:,lexical_covariates+gaze_covariates].apply(lambda x: (x-x.mean())/x.std(), axis=0)
+#     # fillna with 0
+#     covariates = covariates.fillna(0)
+
+#     # trick to get trl and trldict 
+#     annot_to_model = mne.Annotations(
+#         onset=events_to_model['eeg_sample']/EEG.info['sfreq'], 
+#         duration=events_to_model['duration_sec'], 
+#         description=events_to_model['event_type'])
+#     EEG.set_annotations(annot_to_model)
+#     trl_to_model, trldict_to_model = mne.events_from_annotations(EEG, regexp='Fixation|ButtonPress|FixationWord')
+#     # check covariates same length as trl 
+#     if len(covariates) != len(trl_to_model):
+#         print(f'{pID} covariates and trl are different lengths')
+#         # get matching eeg_samples from trl first column and coviarates eeg_sample
+#         trl_eeg_samples = trl_to_model[:,0]
+#         cov_eeg_samples = covariates['eeg_sample']
+#         common = np.intersect1d(trl_eeg_samples, cov_eeg_samples)
+#         covariates = covariates[covariates['eeg_sample'].isin(common)]
+#         trl_to_model = trl_to_model[np.isin(trl_to_model[:,0], common)]
+#     # check if covariates is singular
+#     # Ensure all columns in covariates are numeric
+#     covariates = covariates.apply(pd.to_numeric, errors='coerce').fillna(0)
+#     if np.linalg.matrix_rank(covariates.values) < covariates.shape[1]:
+#         print(f'{pID} covariates are singular')
+#         skip_reasons[pID] = 'singular covariates'
+#         continue
+
+
+#     ##### model
+#     tmin, tmax = -0.3, 0.8
+#     loglevelwas = mne.set_log_level('WARNING', return_old_level=True)
+#     try:
+#         X, rERP, stats = ridge_regression_raw(
+#             EEG, 
+#             events=trl_to_model, event_id=trldict_to_model,
+#             tmin=tmin, tmax=tmax, 
+#             # reject={'eeg': 120e-6}, # uV, as in DImigen Ehinger 2019
+#             tstep=1,
+#             decim=decimation, #TODO: replace w 1 when finalized
+#             covariates=covariates.drop(columns=['eeg_sample']), 
+#             model = partial(ridge_model, alpha=ridge_alpha),
+#             estimate_stats=False
+#         )
+#     except Exception as e:
+#         print(f'Error in fitting model for {pID}: {e}')
+#         skip_reasons[pID] = 'model fitting error: ' + str(e)
+#         break
+#         continue
+#     ##### save stats
+#     save_fn = os.path.join(dir_out, f'{pID}_rERP_stats.npz')
+#     np.savez(save_fn, **stats)
+
+#     fig=rERP['FixationWord'].plot_joint()
+#     fig.savefig(os.path.join(dir_out, f'{pID}_FRP_butterfly.png'))
+
+#     ##### save regression erps
+#     mne.write_evokeds(os.path.join(dir_out, f'{pID}_rERP-evk.fif'), [ev for ev in rERP.values()], overwrite=True)
+#         # append to list of all subjects
+#     # except Exception as e:
+#     #     print(f'Error in {pID}: {e}')
+#     #     traceback.print_exc()
+#     #     continue
+
+#     ##### simply epoch and get traditional ERPs
+#     epochs = mne.Epochs(EEG, trl_to_model, event_id=trldict_to_model, tmin=tmin, tmax=tmax, baseline=(-0.1, 0))
+#     # get evoked for each condition
+#     evoked = {}
+#     for cond in trldict_to_model.keys():
+#         evoked[cond] = epochs[cond].average()
+
+#     # plot evoked
+#     fig = evoked['FixationWord'].plot_joint()
+#     fig.savefig(os.path.join(dir_out, f'{pID}_evoked_butterfly.png'))
+#     fig=mne.viz.plot_compare_evokeds({'FixationWord': evoked['FixationWord'], 'Fixation': evoked['Fixation']}, picks='E55')
+#     fig[0].savefig(os.path.join(dir_out, f'{pID}_evoked_compare.png'))
+#     # save evoked
+#     mne.write_evokeds(os.path.join(dir_out, f'{pID}_ERP-evk.fif'), [e for e in evoked.values()], overwrite=True)
+#     # save epochs
+#     epochs.save(os.path.join(dir_out, f'{pID}_epochs-epo.fif'), overwrite=True)
+# # save skip reasons
+
+
+# #%% read in already processed data
+# pIDs = [re.findall(r'(\w{3})_', f)[0] for f in os.listdir(dir_out) if f.endswith('_rERP-evk.fif')]
+# rERP_list = []
+# for i,pID in enumerate(pIDs):
+#     rERP = mne.read_evokeds(os.path.join(dir_out, f'{pID}_rERP-evk.fif'))
+#     rERP_list.append(rERP)
+
+# rERP_ALL = {}
+# channels = ['E55']
+
+# cond_combinations = {
+#     'FRP': ['FixationWord','Fixation'],
+# }
+# condnames = {}
+# for s in rERP_list:
+#     # refformat to dict of conditions
+#     s={evk.comment:evk for evk in s}
+#     for cond,c in s.items():
+#         condnames[cond] = cond
+#         # baseline correct
+#         c=c.apply_baseline((-.1, 0))
+#         # downsample 
+#         c.resample(100)
+
+#         if cond in rERP_ALL:
+#             rERP_ALL[cond].append(c)
+#         else:
+#             rERP_ALL[cond] = [c]
+#     # combo conditions using mne.combine_evoked
+#     for cc, clist in cond_combinations.items():
+#         res = mne.combine_evoked([s[ci] for ci in clist], weights=[1 for ci in clist])
+#         if cc in rERP_ALL:
+#             rERP_ALL[cc].append(res)
+#         else:
+#             rERP_ALL[cc] = [res]
+# # equalize channels 
+# for c in rERP_ALL:
+#     rERP_ALL[c]=mne.equalize_channels(rERP_ALL[c])
+
+# # combo conditions have annopying long names
+# condnames.update({k: ' + '.join([ vi for vi in v]) for k,v in cond_combinations.items()})
+
+# # %% t test on contrasts
+# contrast_conds =  [ 
+#     'FixationWord',
+#     ['FixationWord', 'Fixation'],
+#     'surprisal','log_word_freq','relative_word_position',
+#     'ButtonPress',
+#                 ]
+# channels = ['E55']
+
+# for cc in contrast_conds:
+#     for ch in channels:
+#         if isinstance(ch, str):
+#             ch = [ch]
+#         if isinstance(cc, str) or len(cc) == 1:
+#             if isinstance(cc, str):
+#                 cc = [cc]
+#                 contrast_name = cc[0]
+#             x = [rERP.get_data(picks=ch) for rERP in rERP_ALL[cc[0]]]
+#             x = np.squeeze(np.array(x))
+
+#         elif len(cc) == 2:
+#             # X is list of array, shape (n_observations, p[, q][, r])
+#             x1 = np.array([rERP.get_data(picks=ch) for rERP in rERP_ALL[cc[0]]])
+#             x2 = np.array([rERP.get_data(picks=ch) for rERP in rERP_ALL[cc[1]]])
+#             x=np.squeeze(x2-x1)
+#             contrast_name = f'{cc[1]} - {cc[0]}'
+#         if len(x.shape)==3: # avg oevr channels
+#             x = np.mean(x, axis=1)
+#         T_obs, clusters, cluster_p_values, H0 = mne.stats.permutation_cluster_1samp_test(
+#                 x, n_permutations=1000, seed=42, out_type='mask')  
+#         times = rERP_ALL[cc[0]][0].times
+#         fig, ax = plt.subplots()
+#         plotdict = {k:rERP_ALL[k] for k in cc}
+#         ax=plot_cluster(clusters, cluster_p_values,times, ax, tcfe=False)  
+#         # hold on 
+#         ax=mne.viz.plot_compare_evokeds(plotdict, picks=ch , axes=ax, combine='mean', show_sensors=False)
+#         fig.suptitle(f'rERP Group-level {contrast_name}')
+#         fig.savefig(os.path.join(dir_out, f"Group_n=({len(rERP_list)})_{contrast_name.replace('/','-')}_{'+'.join(ch)}.png"))
+#     if len(cc) == 1:
+#         evk = mne.grand_average(plotdict[cc[0]])
+#         fig=mne.viz.plot_evoked_joint(evk, picks=['eeg'], times='peaks',exclude=[])
+#         fig.savefig(os.path.join(dir_out, f"Group_n=({len(rERP_list)})_{contrast_name.replace('/','-')}_topo.png"))
+
+# #%% 2-D cluster stats (channels * time)
+# threshold_tfce = dict(start=0, step=0.2)
+
+# for cc in contrast_conds:
+#     print(f'\n\n---{cc}---')
+#     if isinstance(cc, str) or len(cc) == 1:
+#         if isinstance(cc, str):
+#             cc = [cc]
+#             contrast_name = cc[0]
+#         x = [rERP.get_data() for rERP in rERP_ALL[cc[0]]]
+#         x = np.squeeze(np.array(x))
+
+#     elif len(cc) == 2:
+#         # X is list of array, shape (n_observations, p[, q][, r])
+#         x1 = np.array([rERP.get_data() for rERP in rERP_ALL[cc[0]]])
+#         x2 = np.array([rERP.get_data() for rERP in rERP_ALL[cc[1]]])
+#         x=np.squeeze(x2-x1)
+#         contrast_name = f'{cc[1]} - {cc[0]}'
+
+#     F_obs, clusters, cluster_p_values, H0 = mne.stats.permutation_cluster_test(x, seed=42, 
+#     threshold = threshold_tfce , 
+#     out_type='mask', 
+#     check_disjoint=True)
+#     if any (cluster_p_values < 0.05):
+#         print(f'{contrast_name} has significant clusters')
+
+
+# # %% group level analysis of traditional ERP
+# ERP_ALL = {}
+# for i,pID in enumerate(pIDs):
+#     evk = mne.read_evokeds(os.path.join(dir_out, f'{pID}_ERP-evk.fif'))
+#     for c in evk:
+#         cond = c.comment
+#         # baseline correct
+#         c=c.apply_baseline((-.1, 0))
+#         # downsample 
+#         c.resample(100)
+#         if cond in ERP_ALL:
+#             ERP_ALL[cond].append(c)
+#         else:
+#             ERP_ALL[cond] = [c]
+
+
+# # eualize channels
+# for c in ERP_ALL:
+#     ERP_ALL[c]=mne.equalize_channels(ERP_ALL[c])
+
+# # ttests
+# contrast_conds =  [ 
+#     'FixationWord',
+#     ['FixationWord', 'Fixation']
+#                 ]
+# channels = ['E55']
+# for cc in contrast_conds:
+#     for ch in channels:
+#         if isinstance(ch, str):
+#             ch = [ch]
+#         if isinstance(cc, str) or len(cc) == 1:
+#             if isinstance(cc, str):
+#                 cc = [cc]
+#                 contrast_name = cc[0]
+#             x = [ERP.get_data(picks=ch) for ERP in ERP_ALL[cc[0]]]
+#             x = np.squeeze(np.array(x))
+
+#         elif len(cc) == 2:
+#             # X is list of array, shape (n_observations, p[, q][, r])
+#             x1 = np.array([ERP.get_data(picks=ch) for ERP in ERP_ALL[cc[0]]])
+#             x2 = np.array([ERP.get_data(picks=ch) for ERP in ERP_ALL[cc[1]]])
+#             x=np.squeeze(x2-x1)
+#             contrast_name = f'{cc[1]} - {cc[0]}'
+#         if len(x.shape)==3: # avg oevr channels
+#             x = np.mean(x, axis=1)
+#         T_obs, clusters, cluster_p_values, H0 = mne.stats.permutation_cluster_1samp_test(
+#                 x, n_permutations=1000, seed=42, out_type='mask')  
+#         times = ERP_ALL[cc[0]][0].times
+#         fig, ax = plt.subplots()
+#         plotdict = {k:ERP_ALL[k] for k in cc}
+#         ax=plot_cluster(clusters, cluster_p_values,times, ax, tcfe=False)  
+#         # hold on 
+#         ax=mne.viz.plot_compare_evokeds(plotdict, picks=ch , axes=ax, combine='mean', show_sensors=False)
+#         fig.suptitle(f'Traditional ERP Group-level {contrast_name}')
+#         fig.savefig(os.path.join(dir_out, f"GroupERP_n=({len(rERP_list)})_{contrast_name.replace('/','-')}_{'+'.join(ch)}.png"))
+#     if len(cc) == 1:
+#         evk = mne.grand_average(plotdict[cc[0]])
+#         fig=mne.viz.plot_evoked_joint(evk, picks=['eeg'], times='peaks',exclude=[])
+#         fig.savefig(os.path.join(dir_out, f"GroupERP_n=({len(rERP_list)})_{contrast_name.replace('/','-')}_topo.png"))
+# #%% save skip reasons
+# %%

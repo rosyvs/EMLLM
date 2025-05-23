@@ -13,6 +13,7 @@ from mne_custom_regression import (
     ridge_model,
     plot_cluster,
     comprehension_above_chance,
+    plot_evoked_joint
 )
 import seaborn as sns
 
@@ -46,7 +47,7 @@ os.makedirs(dir_out, exist_ok=True)
 dir_events = os.path.expanduser(
     '~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/events/'
 )  # task events
-ia_df = pd.read_csv('../info/ia_label_mapping_opt_surprisal.csv').rename(
+ia_df = pd.read_csv('../../info/ia_label_mapping_opt_surprisal.csv').rename(
     columns={'gpt2_surprisal_page': 'surprisal'}
 )
 # remove punctuation from IA_ID
@@ -62,7 +63,7 @@ ia_df.loc[ia_df['stop_word'], 'log_word_freq'] = np.nan
 beh_df = pd.read_csv(
     '~/Emotive Computing Dropbox/Rosy Southwell/EyeMindLink/Processed/Behaviour/EML1_page_level.csv'
 )  # comp and MW scores
-eeg_trigger_df = pd.read_csv('../info/EEGtriggerSources.csv')
+eeg_trigger_df = pd.read_csv('../../info/EEGtriggerSources.csv')
 fn_base = '_p.fif'
 
 pIDs = [
@@ -533,13 +534,15 @@ for cc in contrast_conds:
                 contrast_name = cc[0]
             x = [rERP.get_data(picks=ch) for rERP in rERP_ALL[cc[0]]]
             x = np.squeeze(np.array(x))
-
+            ymax = np.max(np.abs(np.mean(x, axis=0)))
         elif len(cc) == 2:
             # X is list of array, shape (n_observations, p[, q][, r])
             x1 = np.array([rERP.get_data(picks=ch) for rERP in rERP_ALL[cc[0]]])
             x2 = np.array([rERP.get_data(picks=ch) for rERP in rERP_ALL[cc[1]]])
             x = np.squeeze(x2 - x1)
             contrast_name = f'{cc[1]} - {cc[0]}'
+            # get max y val - average x over 1st dim
+            ymax =np.max([np.abs(np.mean(x1, axis=0)), np.abs(np.mean(x2, axis=0))])
         if len(x.shape) == 3:  # avg oevr channels
             x = np.mean(x, axis=1)
         T_obs, clusters, cluster_p_values, H0 = (
@@ -548,11 +551,46 @@ for cc in contrast_conds:
             )
         )
         times = rERP_ALL[cc[0]][0].times
+        if len(clusters) > 0:
+            for i, c in enumerate(clusters):
+                if cluster_p_values[i] < 0.05:
+                    printlog(f'{contrast_name} {ch}: {times[c][0]:.3f}-{times[c][-1]:.3f}s || *p={cluster_p_values[i]:.3f}*')
+                else:   
+                    printlog(f'{contrast_name} {ch}: {times[c][0]:.3f}-{times[c][-1]:.3f}s || p={cluster_p_values[i]:.3f}')
         fig, ax = plt.subplots()
         plotdict = {k: rERP_ALL[k] for k in cc}
-        ax = plot_cluster(clusters, cluster_p_values, times, ax, tcfe=False)
+        ax = plot_cluster(clusters, cluster_p_values, times, ax)
+
         # hold on
-        ax = mne.viz.plot_compare_evokeds(plotdict, picks=ch, axes=ax, combine='mean')
+        figs = mne.viz.plot_compare_evokeds(plotdict, picks=ch, axes=ax, combine='mean')
+
+        # # get ylim max on this plot  
+        # ylim = figs[0].axes[0].get_ylim()
+        # ax2 = figs[0].axes[0]
+        # # add test text to ax
+        # for i, c in enumerate(clusters):
+        #     if cluster_p_values[i] < 0.05:
+        #         # get start and end time of cluster
+        #         start = times[c][0]
+        #         end = times[c][-1]
+        #         # get y val at start and end of cluster
+        #         y_start = np.mean(x[:, c[0]])
+        #         y_end = np.mean(x[:, c[-1]])
+        #         # add text to ax
+        #         ax2.text(
+        #             start,
+        #             ylim[1] * 0.9,
+        #             f'{cluster_p_values[i]:.3f}',
+        #             fontsize=12,
+        #             color='k',
+        #             ha='center',
+        #             va='bottom',
+        #         )
+        # # force plot sto be displayed
+        # fig.canvas.draw()
+        
+        # if len(clusters) > 0:
+        #     break        
         fig.suptitle(f'Group-level {contrast_name}')
         fig.savefig(
             os.path.join(
@@ -563,7 +601,11 @@ for cc in contrast_conds:
         )
     if len(cc) == 1:
         evk = mne.grand_average(plotdict[cc[0]])
-        fig = mne.viz.plot_evoked_joint(evk, picks=['eeg'], times='peaks', exclude=[])
+        # fig = mne.viz.plot_evoked_joint(evk, picks=['eeg'], times='peaks', cmap='Dark2', exclude=[])
+        fig = plot_evoked_joint(evk, picks=['eeg'], times='peaks', cmap='Dark2', exclude=[], 
+                                ts_args={'spatial_colors':False,'zorder':'std','show_names':True},
+                                topomap_args={'cmap':'RdYlBu',  'show_names':True})
+
         fig.savefig(
             os.path.join(
                 dir_out,

@@ -145,4 +145,75 @@ corr = ia_label_mapping[~ia_label_mapping['stop_word']][['gpt2_surprisal_page', 
 plt.figure(figsize=(10,5))              
 sns.heatmap(corr, annot=True, cmap='coolwarm', center=0)
 plt.title('Correlation matrix: content words only')
+
+# %% table of descriptives
+descriptives = ia_label_mapping[[
+    'gpt2_surprisal_page', 'log_word_freq', 'relative_word_position', 'sentence_word_count']].describe()
+
+# same for content words only
+descriptives_content = ia_label_mapping[~ia_label_mapping['stop_word']][['gpt2_surprisal_page', 'log_word_freq', 'relative_word_position', 'sentence_word_count']].describe()
+
+# combine two descriptives into one table
+descriptives_combined = pd.concat([descriptives, descriptives_content], axis=1, keys=['All Words', 'Content Words'])
+
+# format to 3dp and export
+descriptives_combined = descriptives_combined.round(3)
+descriptives_combined.to_csv('../info/ia_label_mapping_opt_surprisal_descriptives.csv')
+
+# get percent of content words 
+content_word_count = ia_label_mapping[~ia_label_mapping['stop_word']].shape[0]
+all_word_count = ia_label_mapping.shape[0]
+pct_content_words = content_word_count / all_word_count * 100
+print(f'Percentage of content words: {pct_content_words:.2f}%')
+
+# get percent of content words per page 
+pct_content_words_per_page = ia_label_mapping.groupby('identifier')['stop_word'].apply(lambda x: (~x).sum() / x.shape[0] * 100)
+
+# get mean word count per  sentence at page level
+mean_sentence_word_count = ia_label_mapping.groupby('identifier')['sentence_word_count'].mean()
+
+
+# combine into table
+descriptives_page = pd.DataFrame({
+    'mean_sentence_word_count': [mean_sentence_word_count.mean()],
+    'mean_sentence_word_count_sd': [mean_sentence_word_count.std()],
+    'pct_content_words': [pct_content_words_per_page.mean()],
+    'pct_content_words_sd': [pct_content_words_per_page.std()]
+}, index=['overall'])
+descriptives_page.to_csv('../info/ia_label_mapping_opt_surprisal_descriptives_page.csv')
+ # %%
+
+# plot ia_label_mapping histograms for all words and content words, for the 4 columns
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_theme(style="whitegrid")
+# Create a figure with subplots
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+# set overall title
+fig.suptitle('All Words', fontsize=16)
+# Plot histograms for all words
+sns.histplot(ia_label_mapping['gpt2_surprisal_page'], bins=20, ax=axes[0])
+sns.histplot(ia_label_mapping['log_word_freq'], bins=20, ax=axes[1])
+sns.histplot(ia_label_mapping['relative_word_position'], bins=20, ax=axes[2])
+# Set titles for each subplot
+axes[0].set_xlabel('GPT2 Surprisal')
+axes[1].set_xlabel('Log Word Frequency')
+axes[2].set_xlabel('Relative Word Position')
+plt.tight_layout()
+fig.savefig('../info/histograms_all_words.png')
+
+# %% same for content words only
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+# set overall title
+fig.suptitle('Content Words', fontsize=16)
+sns.histplot(ia_label_mapping[~ia_label_mapping['stop_word']]['gpt2_surprisal_page'], bins=20, ax=axes[0])
+sns.histplot(ia_label_mapping[~ia_label_mapping['stop_word']]['log_word_freq'], bins=20, ax=axes[1])
+sns.histplot(ia_label_mapping[~ia_label_mapping['stop_word']]['relative_word_position'], bins=20, ax=axes[2])
+# Set titles for each subplot
+axes[0].set_xlabel('GPT2 Surprisal')
+axes[1].set_xlabel('Log Word Frequency')
+axes[2].set_xlabel('Relative Word Position')
+
+plt.tight_layout()
+fig.savefig('../info/histograms_content_words.png')
 # %%

@@ -469,7 +469,7 @@ def plot_with_stats(evk, pvals, channel='CPz', ax=None, alpha=0.05):
         ranges = np.array([[changepoints[i], changepoints[i+1]] for i in range(0,len(changepoints),2)])
         # colour significant effects with shaded background
         for i, p in enumerate(ranges):
-            ax.axvspan(erp_times[p[0]], erp_times[p[1]], color='k', alpha=0.1)
+            ax.axvspan(erp_times[p[0]], erp_times[p[1]], color='k', alpha=0.2)
     return ax
 
 def plot_cluster(clusters, cluster_p_values, times, ax, yloc=0, add_text=True):  # Removed unused tcfe parameter
@@ -478,7 +478,7 @@ def plot_cluster(clusters, cluster_p_values, times, ax, yloc=0, add_text=True): 
         pcount = 0
         if cluster_p_values[i_c] <= 0.05:
             pcount+= 1
-            h = ax.axvspan(times[c[0]][0], times[c[0]][-1], color="k", alpha=0.1)
+            h = ax.axvspan(times[c[0]][0], times[c[0]][-1], color="k", alpha=0.2)
             # get max y on axes and use this as yloc
             if pcount % 2 == 0:
                 va = 'top'
@@ -495,7 +495,7 @@ def plot_cluster(clusters, cluster_p_values, times, ax, yloc=0, add_text=True): 
 
                 )
     if h:
-        ax.legend((h,), ("cluster p-value < 0.05",))
+        ax.legend((h,), ("cluster p-value < 0.05",), loc='lower right')
     # ax.set_xlabel("time (ms)")
     # ax.set_ylabel("stat")
     return ax

@@ -269,7 +269,7 @@ if REDO:
                     decim=decimation, #TODO: replace w 1 when finalized
                     covariates=covariates.drop(columns=['eeg_sample']), 
                     model = partial(ridge_model, alpha=ridge_alpha),
-                    estimate_stats=False
+                    estimate_pvals=False
                 )
             except Exception as e:
                 print(f'Error in fitting model for {pID}: {e}')

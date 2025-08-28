@@ -71,7 +71,8 @@ pIDs = [
 ]
 # unique and sort
 pIDs = sorted(list(set(pIDs)))
-exclude = [20, 21, 22, 23, 24, 25, 26, 27, 31, 39, 40, 73, 77, 78, 87, 88, 93, 99, 110, 115, 123, 125, 138, 160, 164, 167, 168, 171, 172, 173, 177, 178, 179]  # ubj to exclude because no eeg or no trigger etc.
+exclude = [20, 21, 22, 23, 24, 25, 26, 27, 31, 39, 40, 73, 77, 78, 87, 88, 93, 99, 
+           110, 115, 123, 125, 138, 160, 164, 167, 168, 171, 172, 173, 177, 178, 179]  # ubj to exclude because no eeg or no trigger etc.
 pIDs = [p for p in pIDs if int(re.findall(r'\d{3}', p)[0]) not in exclude]
 
 
@@ -307,7 +308,7 @@ if REDO:
                 decim=decimation,  # TODO: replace w 1 when finalized
                 covariates=covariates,
                 model = partial(ridge_model, alpha=ridge_alpha),
-                estimate_stats=False,
+                estimate_pvals=False,
             )
         except Exception as e:
             printlog(f'Error in fitting model for {pID}: {e}')
@@ -460,8 +461,11 @@ cond_combinations = {
     'FRP_MW=1': ['reading/Fixation', 'MW=1'],
 
 }
+# sort pIDs
+pIDs = sorted(pIDs, key=lambda x: int(re.findall(r'\d{3}', x)[0]))
 condnames = {}
 for pID in pIDs:
+    print(pID)
     s = rERPs[pID]
     # refformat to dict of conditions
     for cond, c in s.items():
@@ -511,8 +515,8 @@ condnames.update(
 # %% t test on contrasts
 components = {'P1': {'latency': [70, 120],'channels':['PPO9h', 'PPO10h']}, 
             #    'N1':{'latency': [180, 220], 'channels':['CCP5h','PPO9h']},
-              'P2': {'latency':[140, 280],'channels':['CPz', 'FCz']},
-              'N400': {'latency':[300, 500],'channels':['CPz']},        # 300-500 is typical, Boudewyn use 300-600, Frank Aumestiere use 250-450
+              'P2': {'latency':[140, 220],'channels':['CPz', 'FCz']},
+              'N400': {'latency':[250, 500],'channels':['CPz']},        # 300-500 is typical, Boudewyn use 300-600, Frank Aumestiere use 250-450
             #   'P600': {'latency':[500, 800],'channels':['CPz', 'FCz']}, 
 }
 # channels = ['CPz', 'FCz', 'AFF5h', 'AFF6h', 'CCP5h', 'CCP6h', 'PPO9h', 'PPO10h']
@@ -523,6 +527,7 @@ components = {'P1': {'latency': [70, 120],'channels':['PPO9h', 'PPO10h']},
 # This positive potential was observed first over anterior and central areas of the scalp between approximately 
 # 140–280 ms after fixation onset, being modulated by parafoveal semantic relatedness [106] and word predictability [113], 
 # and then later between approximately 200–280 ms over occipital scalp sites being modulated by parafoveal word form
+
 
 
 contrast_conds = [
@@ -539,9 +544,12 @@ contrast_conds = [
     'Blink'
 ]
 channels = ['FCz','CPz','AFF5h','AFF6h','CCP5h','CCP6h','PPO9h','PPO10h']
+times = rERP_ALL['reading/Fixation'][0].times
+
 channels = ['CPz']
 for cc in contrast_conds:
-    printlog(f'\n\n~~~Contrast: {cc}')
+    printlog(f'\n\n\nContrast: {cc}')
+
     for ch in channels:
         if isinstance(ch, str):
             ch = [ch]
@@ -562,29 +570,28 @@ for cc in contrast_conds:
             ymax =np.max([np.abs(np.mean(x1, axis=0)), np.abs(np.mean(x2, axis=0))])
         if len(x.shape) == 3:  # avg oevr channels
             x = np.mean(x, axis=1)
-        T_obs, clusters, cluster_p_values, H0 = (
-            mne.stats.permutation_cluster_1samp_test(x, n_permutations=10000, seed=42, out_type='mask'))
+        # T_obs, clusters, cluster_p_values, H0 = (
+        #     mne.stats.permutation_cluster_1samp_test(x, n_permutations=10000, seed=42, out_type='mask'))
 
-        # write stats to csv
-        stats_fn = os.path.join(dir_out, today, f"{contrast_name.replace('/','-')}_{'+'.join(ch)}_stats.csv")
-        stats_df = pd.DataFrame({
-                'times': np.round(rERP_ALL[cc[0]][0].times, 3),
-                'T_obs': T_obs,
-                'cluster_p_values': pd.NA,
-            })
-        # set cluster p values column to corresponding cluster p values per time point
-        for i, c in enumerate(clusters):
-            stats_df.loc[c[0], 'cluster_p_values'] = cluster_p_values[i]
-        stats_df.to_csv(stats_fn, index=False)
+        # # write stats to csv
+        # stats_fn = os.path.join(dir_out, today, f"{contrast_name.replace('/','-')}_{'+'.join(ch)}_stats.csv")
+        # stats_df = pd.DataFrame({
+        #         'times': np.round(rERP_ALL[cc[0]][0].times, 3),
+        #         'T_obs': T_obs,
+        #         'cluster_p_values': pd.NA,
+        #     })
+        # # set cluster p values column to corresponding cluster p values per time point
+        # for i, c in enumerate(clusters):
+        #     stats_df.loc[c[0], 'cluster_p_values'] = cluster_p_values[i]
+        # stats_df.to_csv(stats_fn, index=False)
 
-        times = rERP_ALL[cc[0]][0].times
-        printlog(f'\n~~~Cluster-based stats for {contrast_name} at {ch}:')
-        if len(clusters) > 0:
-            for i, c in enumerate(clusters):
-                if cluster_p_values[i] < 0.05:
-                    printlog(f'{contrast_name} {ch}: {times[c][0]:.3f}-{times[c][-1]:.3f}s || *p={cluster_p_values[i]:.3f}*')
-                else:   
-                    printlog(f'{contrast_name} {ch}: {times[c][0]:.3f}-{times[c][-1]:.3f}s || p={cluster_p_values[i]:.3f}')
+        # printlog(f'\n~~~Cluster-based stats for {contrast_name} at {ch}:')
+        # if len(clusters) > 0:
+        #     for i, c in enumerate(clusters):
+        #         if cluster_p_values[i] < 0.05:
+        #             printlog(f'{contrast_name} {ch}: {times[c][0]:.3f}-{times[c][-1]:.3f}s || *p={cluster_p_values[i]:.3f}*')
+        #         else:   
+        #             printlog(f'{contrast_name} {ch}: {times[c][0]:.3f}-{times[c][-1]:.3f}s || p={cluster_p_values[i]:.3f}')
         
         
         plotdict = {k: rERP_ALL[k] for k in cc}
@@ -593,9 +600,9 @@ for cc in contrast_conds:
         # ax1 = plot_cluster(clusters, cluster_p_values, times, ax1, add_text=False)
 
         # Plot evokeds on ax1
-        figs = mne.viz.plot_compare_evokeds(plotdict, picks=ch, axes=ax1, combine='mean', legend=False)
+        figs = mne.viz.plot_compare_evokeds(plotdict, picks=ch, axes=ax1, combine='mean')
         # set y label to au for continuous vars
-        if any([v in cc for v in ['surprisal', 'log_word_freq', 'relative_word_position','INBOUND_SAC_AMPLITUDE']]):
+        if any([v in contrast_name for v in ['surprisal', 'log_word_freq', 'relative_word_position','INBOUND_SAC_AMPLITUDE']]):
             ax1.set_ylabel('a.u.')
 
         # # Plot T_obs over time on ax2
@@ -635,7 +642,7 @@ for cc in contrast_conds:
         # t test
         T_comp, pval_comp = scipy.stats.ttest_1samp(xc,0)
         stars = ' * ' if pval_comp < 0.05 else '   '
-        printlog(f'{stars}{contrast_name}@{component_name}: T={T_comp:.2f}, p={pval_comp:.3f}{stars} (avg over predefined ERP window)')
+        printlog(f'{stars}{contrast_name}@{component_name}: $t = {T_comp:.2f}$, $p = {pval_comp:.3f}$ {stars} (avg over predefined ERP window)')
 
 
 
@@ -645,7 +652,7 @@ for cc in contrast_conds:
         # fig = mne.viz.plot_evoked_joint(evk, picks=['eeg'], times='peaks', cmap='Dark2', exclude=[])
         fig = plot_evoked_joint(evk, picks=['eeg'], 
                                 # times='peaks', 
-                                times = [0.1,0.2,0.4],
+                                times = [0,0.1,0.2,0.3, 0.4, 0.5],
                                 cmap='Dark2', exclude=[], 
                                 ts_args={'spatial_colors':False,'zorder':'std','show_names':True},
                                 topomap_args={'cmap':'RdYlBu',  'show_names':True})
@@ -654,3 +661,33 @@ for cc in contrast_conds:
         fig.savefig(os.path.join(dir_out, today, f"Group_n=({len(pIDs)}){skip_str}_{contrast_name.replace('/','-')}_topo.pdf"), format='pdf')
 
 # %% coreelate the MW*surprisal beta with comprehension
+beh_avg = beh_df.groupby('ParticipantID').mean(numeric_only=True).reset_index()
+# make new column "compX' which is average of SVT, roteX, infX, deepX
+beh_avg['compX'] = beh_avg[['Rote_X', 'Inference_X', 'Deep_X', 'SVT']].mean(axis=1)
+for component_name, component_info in components.items():
+    component_channels = component_info['channels']
+    component_times = component_info['latency']
+        # get the MW*surprisal beta
+    x1 = np.array([rERP.get_data(picks=ch) for rERP in rERP_ALL['surprisal_MW=0']])
+    x2 = np.array([rERP.get_data(picks=ch) for rERP in rERP_ALL['surprisal_MW=1']])
+    pIDs_rERP = [rERP.comment for rERP in rERP_ALL['surprisal_MW=0']]
+    x = x2 - x1
+    comp_idx = np.where((times >= component_times[0]/1000) & (times <= component_times[1]/1000))[0]
+    # avg over channels
+    x = np.mean(x, axis=1)
+    x = np.squeeze(x)
+    # get mean amplitude in this window
+    x = x[:, comp_idx]
+    x = np.mean(x, axis=1)
+    col_name = f'{component_name}_MWsurprisal'
+    # Ensure pIDs_rERP is aligned with beh_avg
+    col_to_add = pd.Series(x, index=pIDs)
+    beh_avg[col_name] = beh_avg['ParticipantID'].map(col_to_add)
+# drop columns that are na in components
+beh_avg = beh_avg.dropna(subset=[f'{c}_MWsurprisal' for c in components.keys()])
+# correls between each component and compX
+for component_name in components.keys():
+    col_name = f'{component_name}_MWsurprisal'
+    r, p = scipy.stats.pearsonr(beh_avg[col_name], beh_avg['compX'])
+    printlog(f'{col_name} vs compX: r={r:.2f}, p={p:.3f}')
+# %%

@@ -40,7 +40,7 @@ def ridge_model(X, y, solver='auto', alpha=1):
     res = Ridge(solver=solver,alpha=alpha).fit(X, y)
     return res
 
-def ridge_stats(model, X, y):
+def ridge_stats(model, X, y, estimate_pvals=False):
     # estimate t stat and p values for betas from ridge regression
     # https://stats.stackexchange.com/questions/326294/how-to-calculate-t-statistics-for-ridge-regression
 
@@ -57,17 +57,21 @@ def ridge_stats(model, X, y):
     y_pred = model.predict(X)
     residuals = y - y_pred
     mse = np.sum(residuals**2) / (n - p)
-    # try to invert but sometomes X.T X is singular
-    try:
-        XTX_inv = np.linalg.inv(np.dot(X.T, X))
-    except:
-        print('Ridge regression stats: X.T X is singular, adding small value to diagonal')
-        XTX_inv = np.linalg.inv(np.dot(X.T, X) + 1e-10*np.eye(X.shape[1]))
-    se = np.sqrt(np.diagonal(mse * XTX_inv)) 
-    t_stats = beta / se
+    if estimate_pvals:
+        # try to invert but sometomes X.T X is singular
+        try:
+            XTX_inv = np.linalg.inv(np.dot(X.T, X))
+        except:
+            print('Ridge regression stats: X.T X is singular, adding small value to diagonal')
+            XTX_inv = np.linalg.inv(np.dot(X.T, X) + 1e-10*np.eye(X.shape[1]))
+        se = np.sqrt(np.diagonal(mse * XTX_inv)) 
+        t_stats = beta / se
 
-    # Calculate p-values
-    p_values = 2 * (1 - stats.t.cdf(np.abs(t_stats), n - p))
+        # Calculate p-values
+        p_values = 2 * (1 - stats.t.cdf(np.abs(t_stats), n - p))
+    else:
+        t_stats = None
+        p_values = None
 
     # Create a dataframe for results
     stats_dict={
@@ -101,7 +105,7 @@ def ridge_regression_raw(
     decim=1,
     picks=None,
     model="ridge",
-    estimate_stats=True,
+    estimate_pvals=True,
 ):
     """Estimate regression-based evoked potentials/fields by linear modeling.
 
@@ -174,7 +178,7 @@ def ridge_regression_raw(
     model : str | callable
     sklearn model
 
-    estimate_stats : bool
+    estimate_pvals : bool
         If True, estimate t-statistics and p-values for the betas (can take a while)
 
     Returns
@@ -239,16 +243,16 @@ def ridge_regression_raw(
     evokeds, regressor_indices = _make_evokeds(coefs, conds, cond_length, tmin_s, tmax_s, info)
 
     # get stats
-    if estimate_stats:
-        stats = ridge_stats(fitted, X, data.T)
-        stats['regressor_indices'] = regressor_indices
+    stats = ridge_stats(fitted, X, data.T, estimate_pvals=estimate_pvals)
+    stats['regressor_indices'] = regressor_indices
+
+    if estimate_pvals:
+        keys = ["betas", "t-stats", "p-values"]
+    else:   
+        keys = ["betas"]
         # unpack certain stats by condition
-        for key in ["betas", "t-stats", "p-values"]:
-            stats[key] = {cond: stats[key][:,idx[0]:idx[1]] for cond, idx in regressor_indices.items()}
-    else:
-        stats = {}
-        stats['regressor_indices'] = regressor_indices
-        stats['betas'] = coefs
+    for key in keys:
+        stats[key] = {cond: stats[key][:,idx[0]:idx[1]] for cond, idx in regressor_indices.items()}
     return X, evokeds, stats
 
 

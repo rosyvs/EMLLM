@@ -300,7 +300,7 @@ if REDO:
                 decim=decimation,  # TODO: replace w 1 when finalized
                 covariates=covariates,
                 model=ridge_model,
-                estimate_stats=False,
+                estimate_pvals=False,
             )
         except Exception as e:
             print(f"Error in fitting model for {pID}: {e}")

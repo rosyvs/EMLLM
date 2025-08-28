@@ -33,7 +33,7 @@ def top_3_cols_with_nans(df):
     return nans
 
 # %% Get FRP data
-dir_in = '/Volumes/Blue1TB/EEG_processed/FRP_GLM_allfix_decim10'
+dir_in = '/Volumes/Blue1TB/EEG_processed/FRP_GLM_allfix_v2_decim10'
 pIDs =  [re.findall(r'EML1_\d{3}', f)[0] for f in os.listdir(dir_in) if 'dcFRP_epochs_allchannels' in f]
 pIDs = sorted(list(set(pIDs)))
 featdir = 'FRP_stats'
@@ -49,7 +49,12 @@ channel_combos = {'AFFave':['AFF5h','AFF6h'],'CCPave':['CCP5h','CCP6h'],'PPOave'
 'RMS_all':['CPz','FCz','AFF5h','AFF6h','CCP5h','CCP6h','PPO9h','PPO10h']} # string 'rms' in combo key will trigger RMS instead ofmean as agg func
 
 windows = {'P1': [70, 120], 'N1': [140, 280], 'N400': [300, 500]}
-
+components = {'P1': {'latency': [70, 120],'channels':['PPO9h', 'PPO10h']}, 
+            #    'N1':{'latency': [180, 220], 'channels':['CCP5h','PPO9h']},
+              'P2': {'latency':[140, 220],'channels':['CPz', 'FCz']},
+              'N400': {'latency':[250, 500],'channels':['CPz']},        # 300-500 is typical, Boudewyn use 300-600, Frank Aumestiere use 250-450
+            #   'P600': {'latency':[500, 800],'channels':['CPz', 'FCz']}, 
+}
 #%%
 stats_all = []
 for pID in pIDs:
@@ -90,7 +95,21 @@ for pID in pIDs:
             # add columns to stats, prepend channel name an windown name
             for k, v in res.items():
                 cols_to_add[f'{win_label}_{combo_label}_{k}'] = v
-        # z score the EEG min, mean and max features per participant
+    # same for specific components
+    for comp_label, comp in components.items():
+        win = comp['latency']
+        data_array = []
+        for channel in comp['channels']:
+            data = data_dict[channel].values
+            data_array.append(data)
+        data_array = np.array(data_array)
+        data = np.mean(data_array, axis=0)
+        res = get_stats_for_win(win, data, times, rms=False)
+            # add columns to stats, prepend component name and window name
+        for k, v in res.items():
+            cols_to_add[f'{comp_label}_{k}'] = v
+
+    # z score the EEG min, mean and max features per participant
     to_scale = [col for col in cols_to_add.keys() if re.search(r'mean|min|max', col) and not re.search(r'log|lat', col)]
     for col in to_scale:
         cols_to_add[col+'_Z'] = (cols_to_add[col] - cols_to_add[col].mean()) / cols_to_add[col].std()
@@ -235,6 +254,8 @@ for i, (y,x) in enumerate(to_plot):
     ax.set_xlabel(x)
     ax.set_ylabel(y)
 
+# save plot
+fig.savefig(os.path.join(dir_in,featdir, f'key_feat_scatters.png'))
 # %% same as above but color code by participant
 fig, axs = plt.subplots(2, 3, figsize=(12,12))
 to_plot=[['N400_CPz_max_abs', 'surprisal'],
@@ -252,5 +273,5 @@ for i, (y,x) in enumerate(to_plot):
     ax.set_xlabel(x)
     ax.set_ylabel(y)
     ax.legend()
-
+fig.savefig(os.path.join(dir_in,featdir, f'key_feat_scatters_byPID.png'))
 # %%
